@@ -113,6 +113,7 @@ class Client:
         self._pending_acks = {}   # request_id -> node path waiting for its mesh_id
         self._requested = set()   # mesh_ids we already asked a mesh_full for
         self._requested_textures = set()
+        self._pending_states = {}  # object_state that arrived before its object
         self._callback = None
         self._last_ping = 0.0
 
@@ -165,6 +166,7 @@ class Client:
         self.cameras.clear()
         del self.order[:]
         self._requested.clear()
+        self._pending_states.clear()
         self._touch()
 
     def set_session(self, **flags):
@@ -330,6 +332,9 @@ class Client:
         link_id = header.get("link_id")
         entry = self.meshes.get(link_id) or self.lights.get(link_id) or self.cameras.get(link_id)
         if entry is None:
+            # a transfer can announce state before the geometry it describes;
+            # hold it rather than dropping the only word we get on visibility
+            self._pending_states[link_id] = header
             return
         entry["name"] = header.get("name", entry.get("name", ""))
         entry["visible"] = bool(header.get("visible", entry.get("visible", True)))
@@ -387,6 +392,9 @@ class Client:
         if mesh_id not in self.meshes:
             self.order.append(mesh_id)
         self.meshes[mesh_id] = mesh
+        pending = self._pending_states.pop(mesh_id, None)
+        if pending is not None:
+            self._object_state(pending)
         self._requested.discard(mesh_id)
         self._touch()
 

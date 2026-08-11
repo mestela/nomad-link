@@ -146,6 +146,13 @@ nomad.send({"type": "object_state", "link_id": "l1", "name": "Key Light", "visib
 check(wait(lambda: link.lights["l1"]["name"] == "Key Light"), "object_state renames a light")
 check(link.lights["l1"]["visible"] is False, "object_state hides a light")
 
+# state can arrive before the object it describes: it must not be dropped
+nomad.send({"type": "object_state", "link_id": "later", "name": "Late", "visible": False})
+nomad.send(*cube_mesh_full("later", "latergeo"))
+check(wait(lambda: "later" in link.meshes), "the late mesh arrives")
+check(link.meshes["later"]["visible"] is False,
+      "an object_state that preceded its mesh is applied when the mesh lands")
+
 nomad.send({"type": "display_config", "live_sync": False,
             "display": {"shader_type": 1, "pp_bloom_enable": True}})
 check(wait(lambda: link.display.get("pp_bloom_enable") is True), "display_config stored")

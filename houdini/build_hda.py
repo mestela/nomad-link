@@ -124,6 +124,47 @@ def out_parm_group():
     return group
 
 
+def import_parm_group():
+    """The Solaris side: the whole Nomad scene onto a stage."""
+    group = hou.ParmTemplateGroup()
+    group.append(connection_folder())
+
+    scale = hou.FloatParmTemplate("scale", "Scale", 1, default_value=(1.0,), min=0.001, max=100.0)
+    scale.setHelp("Uniform scale applied to positions and transforms.")
+    light_scale = hou.FloatParmTemplate("lightscale", "Light Intensity Scale", 1,
+                                        default_value=(1.0,), min=0.0, max=100.0)
+    light_scale.setHelp("Nomad's light strengths are not in Karma's units; tune here.")
+
+    group.append(hou.FolderParmTemplate(
+        "import", "Import",
+        [button("getsel", "Get Selection", "get_selection",
+                "Ask Nomad for its current selection."),
+         button("getscene", "Get Scene", "get_scene",
+                "Ask Nomad for every object in the scene."),
+         toggle("importmaterials", "Import Materials", True,
+                "Nomad's material block as UsdPreviewSurface, with its textures."),
+         toggle("importlights", "Import Lights", True),
+         toggle("importcameras", "Import Cameras", True),
+         scale, light_scale],
+        folder_type=hou.folderType.Simple,
+    ))
+    group.append(hidden(hou.IntParmTemplate("revision", "Revision", 1, default_value=(0,))))
+    return group
+
+
+def build_import(container):
+    subnet = container.createNode("subnet", "nomad_link_import")
+    for child in subnet.children():
+        child.destroy()
+    build = subnet.createNode("pythonscript", "build")
+    build.parm("python").set("import nomad_link\nnomad_link.cook_import(hou.pwd())\n")
+    output = subnet.createNode("output", "output0")
+    output.setInput(0, build)
+    output.setDisplayFlag(True)
+    subnet.layoutChildren()
+    return subnet, build
+
+
 def wrangle(parent, name, class_index, snippet):
     node = parent.createNode("attribwrangle", name)
     node.parm("class").set(class_index)  # 0 detail, 1 primitive, 2 point, 3 vertex
@@ -220,6 +261,12 @@ def main():
     subnet, send = build_out(container)
     make_asset(subnet, "send", "nomad_link_out", "Nomad Link Out", out_parm_group(),
                ("autosend", "applyxform", "reverse", "scale", "senduv", "sendcolor"), 1, 1)
+
+    stage = hou.node("/stage")
+    subnet, build = build_import(stage)
+    make_asset(subnet, "build", "nomad_link_import", "Nomad Link Import", import_parm_group(),
+               ("revision", "scale", "lightscale", "importmaterials", "importlights",
+                "importcameras"), 0, 1)
 
     container.destroy()
     hou.hda.installFile(HDA_FILE)

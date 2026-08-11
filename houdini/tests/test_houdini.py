@@ -168,5 +168,52 @@ nomad.send({"type": "mesh_ack", "mesh_id": "nomad_side_id", "request_id": "req9"
 check(wait(link, lambda: node_out.evalParm("meshid") == "nomad_side_id"),
       "mesh_ack stores Nomad's mesh id on the node")
 
+# ---------------------------------------------------------------- Solaris (LOPs)
+check(hou.nodeType(hou.lopNodeTypeCategory(), "nomad_link_import") is not None,
+      "nomad_link_import is installed as a LOP")
+lop = hou.node("/stage").createNode("nomad_link_import")
+
+nomad.send({"type": "material", "mesh_id": "m1", "material": {
+    "color": [0.8, 0.1, 0.1], "roughness": 0.35, "metalness": 0.0}})
+nomad.send({"type": "light", "link_id": "l1", "name": "Key", "light_type": "SPOT",
+            "color": [1.0, 0.9, 0.8], "power": 40.0, "spot_angle": 1.0,
+            "world_matrix": list(convert.IDENTITY)})
+camera_matrix = list(convert.IDENTITY)
+camera_matrix[14] = 12.0
+nomad.send({"type": "camera_object", "link_id": "c1", "name": "Shot", "fov_y": 35.0,
+            "world_matrix": camera_matrix})
+check(wait(link, lambda: link.materials and link.lights and link.cameras),
+      "the scene objects reach the cache")
+
+from pxr import UsdGeom, UsdLux, UsdShade  # noqa: E402
+
+usd_stage = lop.stage()
+paths = [p.GetPath().pathString for p in usd_stage.Traverse()]
+check("/nomad/Sculpt" in paths, "the mesh is on the stage: %s" % paths)
+usd_mesh = UsdGeom.Mesh(usd_stage.GetPrimAtPath("/nomad/Sculpt"))
+check(list(usd_mesh.GetFaceVertexCountsAttr().Get()) == [4, 3], "quad survives into USD")
+check(list(usd_mesh.GetFaceVertexIndicesAttr().Get()) == [0, 1, 2, 3, 1, 4, 2],
+      "USD keeps Nomad's winding, unlike the SOP path")
+translation = UsdGeom.Xformable(usd_mesh).GetLocalTransformation().ExtractTranslation()
+check(abs(translation[1] - 10.0) < 1e-5, "the world_matrix became the prim transform")
+check(abs(usd_mesh.GetPointsAttr().Get()[0][1] - 7.0) < 1e-4,
+      "the live delta is in the USD points too")
+check(len(UsdGeom.Subset.GetAllGeomSubsets(usd_mesh)) == 2, "face groups became GeomSubsets")
+
+bound = UsdShade.MaterialBindingAPI(usd_mesh.GetPrim()).GetDirectBinding().GetMaterial()
+check(bool(bound), "a material is bound to the mesh")
+preview = UsdShade.Shader(usd_stage.GetPrimAtPath(bound.GetPath().pathString + "/Preview"))
+check(abs(preview.GetInput("roughness").Get() - 0.35) < 1e-6, "material values reached USD")
+check(bool(UsdLux.SphereLight(usd_stage.GetPrimAtPath("/nomad/Key"))), "the spot light is a prim")
+check(bool(UsdGeom.Camera(usd_stage.GetPrimAtPath("/nomad/Shot"))), "the camera is a prim")
+
+# a second light must show up without anyone touching the node
+revision = lop.evalParm("revision")
+nomad.send({"type": "light", "link_id": "l2", "name": "Rim", "light_type": "SUN",
+            "intensity": 2.0, "world_matrix": list(convert.IDENTITY)})
+check(wait(link, lambda: lop.evalParm("revision") != revision), "the LOP's revision is bumped")
+check(bool(UsdLux.DistantLight(lop.stage().GetPrimAtPath("/nomad/Rim"))),
+      "the LOP recooked and the new light is on the stage")
+
 link.disconnect()
 print("\nall good")

@@ -1,0 +1,374 @@
+# SPDX-License-Identifier: MIT
+"""Author the Nomad scene onto a USD stage.
+
+Nomad's model is glTF-shaped -- Y-up, column-major matrices, cameras down -Z,
+a PBR material block -- so it lands on USD with very little translation:
+
+    meshes      UsdGeom.Mesh, face groups as UsdGeomSubset
+    materials   UsdPreviewSurface + UsdUVTexture (+ UsdTransform2d for uv xforms)
+    lights      UsdLux Sphere / Distant / Rect / Dome, spots via ShapingAPI
+    cameras     UsdGeom.Camera
+
+Note there is no winding flip here, unlike the SOP path: USD's default
+`rightHanded` orientation is glTF's, so Nomad's faces are already correct.
+
+Nothing here touches hou -- it takes a stage and the client's cache.
+"""
+import math
+
+import numpy
+from pxr import Gf, Sdf, Tf, UsdGeom, UsdLux, UsdShade, Vt
+
+ROOT = "/nomad"
+MATERIALS = ROOT + "/Materials"
+
+# Nomad texture channel -> (UsdPreviewSurface input, value type, is colour)
+TEXTURE_INPUTS = {
+    "color": ("diffuseColor", Sdf.ValueTypeNames.Color3f, True),
+    "roughness": ("roughness", Sdf.ValueTypeNames.Float, False),
+    "metalness": ("metallic", Sdf.ValueTypeNames.Float, False),
+    "normal": ("normal", Sdf.ValueTypeNames.Normal3f, False),
+    "emissive": ("emissiveColor", Sdf.ValueTypeNames.Color3f, True),
+    "occlusion": ("occlusion", Sdf.ValueTypeNames.Float, False),
+    "opacity": ("opacity", Sdf.ValueTypeNames.Float, False),
+    "displacement": ("displacement", Sdf.ValueTypeNames.Float, False),
+}
+CHANNEL_SUFFIX = {"color": "rgb", "emissive": "rgb", "normal": "rgb"}
+WRAP = {"repeat": "repeat", "clamp": "clamp", "mirror": "mirror"}
+
+
+def _array(values, vt_type, dtype):
+    flat = numpy.ascontiguousarray(values, dtype)
+    try:
+        return vt_type.FromNumpy(flat)
+    except (AttributeError, TypeError):
+        return vt_type(flat.tolist())
+
+
+def matrix(values):
+    """Nomad's column-major 16 floats -> Gf.Matrix4d.
+
+    USD stores row-major and multiplies row vectors, which makes its layout the
+    transpose of glTF's -- so the flat list transfers straight across.
+    """
+    return Gf.Matrix4d(*[float(v) for v in values])
+
+
+def unique_child(parent_path, name, taken):
+    """A valid, unused prim name for a user-facing Nomad object name."""
+    base = Tf.MakeValidIdentifier(name or "unnamed")
+    candidate, index = base, 1
+    while candidate in taken:
+        index += 1
+        candidate = "%s_%d" % (base, index)
+    taken.add(candidate)
+    return parent_path + "/" + candidate
+
+
+def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_lights=True,
+                 import_cameras=True, light_scale=1.0):
+    """Write everything the client has cached onto `stage`. Returns prim paths."""
+    UsdGeom.Xform.Define(stage, ROOT)
+    try:
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+    except Tf.ErrorException:
+        pass  # a LOP edits a sublayer and cannot set stage metadata; Houdini is Y-up already
+    written = []
+    taken = set()
+
+    materials = {}
+    if import_materials and cache.materials:
+        UsdGeom.Scope.Define(stage, MATERIALS)
+        material_names = set()
+        for mesh_id, block in cache.materials.items():
+            mesh = cache.meshes.get(mesh_id)
+            name = mesh["name"] if mesh else mesh_id
+            path = unique_child(MATERIALS, name, material_names)
+            materials[mesh_id] = author_material(stage, path, block, cache.textures)
+            written.append(path)
+
+    for mesh_id in cache.order:
+        mesh = cache.meshes.get(mesh_id)
+        if mesh is None:
+            continue
+        path = unique_child(ROOT, mesh["name"], taken)
+        prim = author_mesh(stage, path, mesh, scale=scale)
+        material = materials.get(mesh_id)
+        if material is not None:
+            UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
+            UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)
+        written.append(path)
+
+    if import_lights:
+        for light in cache.lights.values():
+            path = unique_child(ROOT, light.get("name", "light"), taken)
+            author_light(stage, path, light, scale=scale, light_scale=light_scale)
+            written.append(path)
+
+    if import_cameras:
+        for camera in cache.cameras.values():
+            path = unique_child(ROOT, camera.get("name", "camera"), taken)
+            author_camera(stage, path, camera, scale=scale)
+            written.append(path)
+
+    return written
+
+
+# ----------------------------------------------------------------------- mesh
+
+def author_mesh(stage, path, mesh, scale=1.0):
+    geom = UsdGeom.Mesh.Define(stage, path)
+    prim = geom.GetPrim()
+
+    points = numpy.asarray(mesh["positions"], numpy.float32) * scale
+    geom.CreatePointsAttr(_array(points, Vt.Vec3fArray, "f4"))
+    geom.CreateFaceVertexCountsAttr(_array(mesh["sizes"], Vt.IntArray, "i4"))
+    geom.CreateFaceVertexIndicesAttr(_array(mesh["corners"], Vt.IntArray, "i4"))
+    geom.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    if len(points):
+        geom.CreateExtentAttr(_array([points.min(axis=0), points.max(axis=0)],
+                                     Vt.Vec3fArray, "f4"))
+    if not mesh.get("smooth_shading", True):
+        normals = flat_normals(points, mesh["sizes"], mesh["corners"])
+        geom.CreateNormalsAttr(_array(normals, Vt.Vec3fArray, "f4"))
+        geom.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+
+    UsdGeom.Xformable(prim).AddTransformOp().Set(matrix(scaled_matrix(mesh["world_matrix"], scale)))
+    if not mesh.get("visible", True):
+        UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+
+    api = UsdGeom.PrimvarsAPI(prim)
+    if "texcoords" in mesh:
+        uvs = mesh["texcoords"][numpy.asarray(mesh["corner_uv"], numpy.int64)]
+        uvs = numpy.column_stack((uvs[:, 0], 1.0 - uvs[:, 1]))  # USD's v origin is bottom-left
+        primvar = api.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray,
+                                    UsdGeom.Tokens.faceVarying)
+        primvar.Set(_array(uvs, Vt.Vec2fArray, "f4"))
+    if "color" in mesh:
+        primvar = api.CreatePrimvar("displayColor", Sdf.ValueTypeNames.Color3fArray,
+                                    UsdGeom.Tokens.vertex)
+        primvar.Set(_array(mesh["color"], Vt.Vec3fArray, "f4"))
+    if "alpha" in mesh:
+        primvar = api.CreatePrimvar("displayOpacity", Sdf.ValueTypeNames.FloatArray,
+                                    UsdGeom.Tokens.vertex)
+        primvar.Set(_array(mesh["alpha"], Vt.FloatArray, "f4"))
+    for key in ("rough", "metallic", "mask", "density"):
+        if key in mesh:
+            primvar = api.CreatePrimvar(key, Sdf.ValueTypeNames.FloatArray,
+                                        UsdGeom.Tokens.vertex)
+            primvar.Set(_array(mesh[key], Vt.FloatArray, "f4"))
+
+    if "face_group" in mesh:
+        author_face_groups(geom, mesh)
+
+    prim.SetCustomDataByKey("nomad:mesh_id", mesh.get("mesh_id", ""))
+    prim.SetCustomDataByKey("nomad:geometry_id", mesh.get("geometry_id", ""))
+    return geom
+
+
+def author_face_groups(geom, mesh):
+    """Nomad face groups become UsdGeomSubsets, one per group that has faces."""
+    groups = numpy.asarray(mesh["face_group"], numpy.int32)
+    names = list(mesh.get("face_group_names", ()))
+    for index in numpy.unique(groups):
+        faces = numpy.flatnonzero(groups == index)
+        label = names[index] if index < len(names) else "group%d" % index
+        subset = UsdGeom.Subset.CreateGeomSubset(
+            geom, Tf.MakeValidIdentifier(label), UsdGeom.Tokens.face,
+            _array(faces, Vt.IntArray, "i4"), "nomadFaceGroup",
+        )
+        subset.GetPrim().SetCustomDataByKey("nomad:face_group", int(index))
+
+
+def flat_normals(points, sizes, corners):
+    """One normal per corner from the face plane, for flat-shaded meshes."""
+    sizes = numpy.asarray(sizes, numpy.int64)
+    corners = numpy.asarray(corners, numpy.int64)
+    starts = numpy.concatenate(([0], numpy.cumsum(sizes)[:-1]))
+    first, second, third = (points[corners[starts]], points[corners[starts + 1]],
+                            points[corners[starts + 2]])
+    face = numpy.cross(second - first, third - first)
+    lengths = numpy.linalg.norm(face, axis=1)
+    lengths[lengths == 0.0] = 1.0
+    return numpy.repeat(face / lengths[:, None], sizes, axis=0)
+
+
+def scaled_matrix(values, scale):
+    """Scale the translation to match scaled points, leaving rotation alone."""
+    if scale == 1.0:
+        return values
+    out = list(values)
+    out[12], out[13], out[14] = out[12] * scale, out[13] * scale, out[14] * scale
+    return out
+
+
+# ------------------------------------------------------------------- material
+
+def author_material(stage, path, block, textures):
+    material = UsdShade.Material.Define(stage, path)
+    shader = UsdShade.Shader.Define(stage, path + "/Preview")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    channels = block.get("textures") or {}
+    # a bound texture replaces the scalar for these channels (PROTOCOL.md section 10),
+    # so do not author a value the texture connection would only override
+    textured = {name for name, channel in channels.items()
+                if textures.get(channel.get("texture_id"))}
+
+    colour = block.get("color")
+    if colour is not None and "color" not in textured:
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*colour[:3]))
+    for key, name in (("roughness", "roughness"), ("metalness", "metallic"),
+                      ("opacity", "opacity")):
+        if key in block and key not in textured:
+            shader.CreateInput(name, Sdf.ValueTypeNames.Float).Set(float(block[key]))
+    if "refraction_ior" in block:
+        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(float(block["refraction_ior"]))
+    if block.get("material_type") == "blending" or float(block.get("opacity", 1.0)) < 1.0:
+        shader.CreateInput("opacityThreshold", Sdf.ValueTypeNames.Float).Set(0.0)
+    if block.get("two_sided_value"):
+        pass  # doubleSided lives on the mesh, not the shader
+
+    if any(channel.get("texture_id") for channel in channels.values()):
+        reader = UsdShade.Shader.Define(stage, path + "/stReader")
+        reader.CreateIdAttr("UsdPrimvarReader_float2")
+        reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+        for name, channel in channels.items():
+            author_texture(stage, path, shader, reader, name, channel, textures)
+
+    # Nomad extras UsdPreviewSurface cannot express, kept so nothing is silently lost
+    extras = {key: value for key, value in block.items()
+              if key.startswith(("subsurface", "absorption", "translucency", "refraction"))
+              or key in ("material_type", "reflectance", "shadow_color")}
+    if extras:
+        material.GetPrim().SetCustomDataByKey("nomad:material", extras)
+    return material
+
+
+def author_texture(stage, path, shader, reader, name, channel, textures):
+    target = TEXTURE_INPUTS.get(name)
+    texture_id = channel.get("texture_id")
+    if target is None or not texture_id:
+        return
+    blob = textures.get(texture_id)
+    if blob is None:
+        return  # not arrived yet; the client has asked for it and we recook on arrival
+
+    input_name, value_type, is_colour = target
+    node = UsdShade.Shader.Define(stage, "%s/%s_texture" % (path, Tf.MakeValidIdentifier(name)))
+    node.CreateIdAttr("UsdUVTexture")
+    node.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(blob["path"])
+    node.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set(WRAP.get(channel.get("wrap_s"), "repeat"))
+    node.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set(WRAP.get(channel.get("wrap_t"), "repeat"))
+    node.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set(
+        "sRGB" if is_colour else "raw")
+
+    factor = channel.get("factor")
+    if factor is not None:
+        values = [float(f) for f in factor] if isinstance(factor, (list, tuple)) else [float(factor)] * 3
+        node.CreateInput("scale", Sdf.ValueTypeNames.Float4).Set(
+            Gf.Vec4f(values[0], values[1 % len(values)], values[2 % len(values)], 1.0))
+
+    source = reader
+    transform = uv_transform(stage, path, name, channel, reader)
+    if transform is not None:
+        source = transform
+    node.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        source.ConnectableAPI(), "result")
+
+    suffix = CHANNEL_SUFFIX.get(name, "r")
+    node.CreateOutput(suffix, value_type)
+    shader.CreateInput(input_name, value_type).ConnectToSource(node.ConnectableAPI(), suffix)
+
+
+def uv_transform(stage, path, name, channel, reader):
+    """Nomad's per-channel uv offset/scale/rotation as a UsdTransform2d."""
+    offset = channel.get("offset", [0.0, 0.0])
+    scale = channel.get("scale", [1.0, 1.0])
+    rotation = float(channel.get("rotation", 0.0))
+    if list(offset) == [0.0, 0.0] and list(scale) == [1.0, 1.0] and rotation == 0.0:
+        return None
+    node = UsdShade.Shader.Define(stage, "%s/%s_uv" % (path, Tf.MakeValidIdentifier(name)))
+    node.CreateIdAttr("UsdTransform2d")
+    node.CreateInput("in", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        reader.ConnectableAPI(), "result")
+    node.CreateInput("translation", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(*offset[:2]))
+    node.CreateInput("scale", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(*scale[:2]))
+    node.CreateInput("rotation", Sdf.ValueTypeNames.Float).Set(math.degrees(rotation))
+    node.CreateOutput("result", Sdf.ValueTypeNames.Float2)
+    return node
+
+
+# ---------------------------------------------------------------------- light
+
+def author_light(stage, path, light, scale=1.0, light_scale=1.0):
+    kind = str(light.get("light_type", "POINT")).upper()
+    if kind == "SUN":
+        prim = UsdLux.DistantLight.Define(stage, path)
+        prim.CreateAngleAttr(math.degrees(float(light.get("angle", 0.0))))
+        intensity = float(light.get("intensity", 1.0))
+    elif kind == "AREA":
+        prim = UsdLux.RectLight.Define(stage, path)
+        prim.CreateWidthAttr(float(light.get("size", 1.0)) * scale or 1.0)
+        prim.CreateHeightAttr(float(light.get("size", 1.0)) * scale or 1.0)
+        intensity = float(light.get("power", 1.0))
+    elif kind == "ENVIRONMENT":
+        prim = UsdLux.DomeLight.Define(stage, path)
+        intensity = float(light.get("factor", 1.0))
+    else:  # POINT and SPOT are both sphere lights; SPOT adds a cone
+        prim = UsdLux.SphereLight.Define(stage, path)
+        prim.CreateRadiusAttr(float(light.get("size", 0.0)) * scale)
+        prim.CreateTreatAsPointAttr(float(light.get("size", 0.0)) <= 0.0)
+        intensity = float(light.get("power", 1.0))
+        if kind == "SPOT":
+            shaping = UsdLux.ShapingAPI.Apply(prim.GetPrim())
+            # Nomad sends the full outer cone; USD wants the half angle
+            shaping.CreateShapingConeAngleAttr(math.degrees(float(light.get("spot_angle", 0.785))) / 2.0)
+            softness = float(light.get("spot_softness", 0.5))
+            shaping.CreateShapingConeSoftnessAttr(softness)
+
+    prim.CreateIntensityAttr(intensity * light_scale)
+    colour = light.get("color")
+    if colour is not None:
+        prim.CreateColorAttr(Gf.Vec3f(*colour[:3]))
+    if light.get("use_kelvin"):
+        prim.CreateEnableColorTemperatureAttr(True)
+        prim.CreateColorTemperatureAttr(float(light.get("kelvin", 6500)))
+    if "shadow_cast" in light:
+        UsdLux.ShadowAPI.Apply(prim.GetPrim()).CreateShadowEnableAttr(bool(light["shadow_cast"]))
+
+    UsdGeom.Xformable(prim.GetPrim()).AddTransformOp().Set(
+        matrix(scaled_matrix(light.get("world_matrix", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), scale)))
+    if not light.get("visible", True):
+        UsdGeom.Imageable(prim.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    prim.GetPrim().SetCustomDataByKey("nomad:link_id", light.get("link_id", ""))
+    return prim
+
+
+# --------------------------------------------------------------------- camera
+
+def author_camera(stage, path, camera, scale=1.0, aperture=24.0):
+    """Nomad and USD cameras both look down -Z with +Y up, so the matrix transfers."""
+    geom = UsdGeom.Camera.Define(stage, path)
+    if camera.get("orthographic"):
+        geom.CreateProjectionAttr(UsdGeom.Tokens.orthographic)
+        # USD ortho apertures are in tenths of a scene unit
+        size = float(camera.get("ortho_scale", 1.0)) * scale * 10.0
+        geom.CreateHorizontalApertureAttr(size)
+        geom.CreateVerticalApertureAttr(size)
+    else:
+        geom.CreateProjectionAttr(UsdGeom.Tokens.perspective)
+        fov = math.radians(float(camera.get("fov_y", 50.0)))
+        geom.CreateVerticalApertureAttr(aperture)
+        geom.CreateHorizontalApertureAttr(aperture * 16.0 / 9.0)
+        geom.CreateFocalLengthAttr((aperture / 2.0) / math.tan(fov / 2.0))
+
+    geom.CreateClippingRangeAttr(Gf.Vec2f(0.01 * scale, 1000000.0 * scale))
+    UsdGeom.Xformable(geom.GetPrim()).AddTransformOp().Set(
+        matrix(scaled_matrix(camera.get("world_matrix", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), scale)))
+    prim = geom.GetPrim()
+    prim.SetCustomDataByKey("nomad:link_id", camera.get("link_id", ""))
+    if "pivot" in camera:
+        prim.SetCustomDataByKey("nomad:pivot", Gf.Vec3d(*[float(v) for v in camera["pivot"][:3]]))
+    return geom

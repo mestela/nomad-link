@@ -17,8 +17,9 @@ DEFAULT_PORT = 48312
 CLIENT_NAME = "Houdini"
 PING_INTERVAL = 10.0
 
-# honest hello: we receive geometry and object state and we send mesh_full.
-# No material/light/camera handling, so those are not advertised.
+# honest hello: we receive geometry, object state and the scene objects that the
+# LOP side authors on a stage, and we send mesh_full. We do not advertise
+# "camera" -- that means sending our working view, which we do not do.
 CAPABILITIES = [
     "selection_transfer",
     "scene_transfer",
@@ -28,6 +29,11 @@ CAPABILITIES = [
     "mesh_delta_receive",
     "mesh_instance",
     "ngon",
+    "material",
+    "light",
+    "camera_object",
+    "texture",
+    "display_config",
 ]
 
 _client = None
@@ -47,6 +53,23 @@ def _token_path():
     except Exception:
         base = os.path.expanduser("~")
     return os.path.join(base, "nomad_link_tokens.json")
+
+
+def texture_cache():
+    """Where texture blobs land, so materials can point USD at real files."""
+    try:
+        import hou
+        base = hou.text.expandString("$HOUDINI_TEMP_DIR")
+    except Exception:
+        import tempfile
+        base = tempfile.gettempdir()
+    path = os.path.join(base, "nomad_link_textures")
+    if not os.path.isdir(path):
+        try:
+            os.makedirs(path)
+        except OSError:
+            pass
+    return path
 
 
 def _load_tokens():
@@ -78,10 +101,17 @@ class Client:
         self.session_config = {}
         self.meshes = {}          # mesh_id -> decoded mesh dict (convert.decode_mesh)
         self.order = []           # arrival order, for the node menus
+        self.materials = {}       # mesh_id -> material block (PROTOCOL.md section 10)
+        self.lights = {}          # link_id -> light header
+        self.cameras = {}         # link_id -> camera_object header
+        self.textures = {}        # texture_id -> {"name": ..., "path": ...} on disk
+        self.display = {}         # display_config settings
+        self.working_camera = {}  # newest `camera` message: Nomad's own viewport
         self.revision = 0         # bumped whenever the cache changes
         self.log = []
         self._pending_acks = {}   # request_id -> node path waiting for its mesh_id
         self._requested = set()   # mesh_ids we already asked a mesh_full for
+        self._requested_textures = set()
         self._callback = None
         self._last_ping = 0.0
 
@@ -202,6 +232,8 @@ class Client:
         elif kind == "mesh_full":
             mesh = convert.decode_mesh(header, binary)
             self._store(mesh)
+            if "material" in header:  # mesh_full carries the same block as `material`
+                self._store_material(header["mesh_id"], header["material"])
         elif kind == "mesh_instance":
             self._instance(header)
         elif kind == "mesh_delta":
@@ -213,17 +245,29 @@ class Client:
         elif kind == "mesh_attributes":
             self._recover(header.get("mesh_id", ""))  # cheaper to just refetch
         elif kind == "object_state":
-            mesh = self.meshes.get(header.get("link_id"))
-            if mesh is not None:
-                mesh["name"] = header.get("name", mesh["name"])
-                mesh["visible"] = bool(header.get("visible", mesh.get("visible", True)))
-                if "world_matrix" in header:
-                    mesh["world_matrix"] = list(header["world_matrix"])
-                self._touch()
+            self._object_state(header)
         elif kind == "object_delete":
-            if self.meshes.pop(header.get("link_id"), None) is not None:
+            link_id = header.get("link_id")
+            gone = [store.pop(link_id, None) for store in
+                    (self.meshes, self.lights, self.cameras, self.materials)]
+            if any(item is not None for item in gone):
                 self.order = [i for i in self.order if i in self.meshes]
                 self._touch()
+        elif kind == "material":
+            self._store_material(header.get("mesh_id", ""), header.get("material", {}))
+        elif kind in ("light", "camera_object"):
+            store = self.lights if kind == "light" else self.cameras
+            link_id = header.get("link_id", "")
+            entry = store.setdefault(link_id, {"link_id": link_id, "type": kind})
+            entry.update(header)  # only edited fields are sent; absent means unchanged
+            self._touch()
+        elif kind == "camera":
+            self.working_camera = header  # newest wins, older pending ones are stale
+        elif kind == "display_config":
+            self.display.update(header.get("display", {}))
+            self._touch()
+        elif kind == "texture":
+            self._store_texture(header, binary)
         elif kind == "mesh_ack":
             path = self._pending_acks.pop(header.get("request_id", ""), None)
             if path and self._nodes():
@@ -242,6 +286,63 @@ class Client:
         except ImportError:
             return None
         return nodes
+
+    def _object_state(self, header):
+        """Rename/move/hide, for whichever kind of object the id belongs to."""
+        link_id = header.get("link_id")
+        entry = self.meshes.get(link_id) or self.lights.get(link_id) or self.cameras.get(link_id)
+        if entry is None:
+            return
+        entry["name"] = header.get("name", entry.get("name", ""))
+        entry["visible"] = bool(header.get("visible", entry.get("visible", True)))
+        if "world_matrix" in header:
+            entry["world_matrix"] = list(header["world_matrix"])
+        self._touch()
+
+    def _store_material(self, mesh_id, material):
+        if not mesh_id:
+            return
+        # only edited fields travel, so merge rather than replace
+        entry = self.materials.setdefault(mesh_id, {})
+        textures = entry.pop("textures", {})
+        entry.update(material)
+        incoming = material.get("textures")
+        if incoming is not None:
+            # a present channel is authoritative, an absent one keeps what we have
+            textures.update(incoming)
+        entry["textures"] = textures
+        for channel in textures.values():
+            texture_id = channel.get("texture_id")
+            if texture_id and texture_id not in self.textures:
+                self.request_texture(texture_id)
+        self._touch()
+
+    def request_texture(self, texture_id):
+        if texture_id in self._requested_textures:
+            return
+        self._requested_textures.add(texture_id)
+        self.send({"type": "request_texture", "texture_id": texture_id})
+
+    def _store_texture(self, header, binary):
+        """Blobs are immutable per id; cache them on disk so USD can reference them."""
+        texture_id = header.get("texture_id", "")
+        if not texture_id or not binary:
+            return
+        name = os.path.basename(str(header.get("name", "")))  # untrusted: basename only
+        extension = os.path.splitext(name)[1].lower() or ".png"
+        if extension not in (".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".tga", ".webp"):
+            extension = ".png"
+        path = os.path.join(texture_cache(), texture_id + extension)
+        if not os.path.exists(path):
+            try:
+                with open(path, "wb") as handle:
+                    handle.write(binary)
+            except OSError as exc:
+                self.note("could not cache texture %s: %s" % (name or texture_id, exc))
+                return
+        self.textures[texture_id] = {"name": name, "path": path}
+        self._requested_textures.discard(texture_id)
+        self._touch()
 
     def _store(self, mesh):
         mesh_id = mesh["mesh_id"]

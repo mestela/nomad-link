@@ -14,6 +14,7 @@ try:
     from .nodes import (
         answer_request,
         connect_button,
+        cook_import,
         cook_in,
         cook_out,
         disconnect_button,
@@ -32,7 +33,7 @@ except ImportError:  # no hou: the codecs and the client still work
 __all__ = [
     "DEFAULT_PORT", "PROTOCOL", "client", "connect", "disconnect",
     "connect_button", "disconnect_button", "get_scene", "get_selection",
-    "send_button", "send_geometry", "cook_in", "cook_out", "mesh_menu",
+    "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
 ]
 

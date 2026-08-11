@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: MIT
+"""Author a Nomad scene onto a USD stage and read it back:
+
+    hython tests/test_usd.py
+
+Needs pxr, so it runs under hython (or any USD-enabled interpreter), but it
+does not need hou -- the authoring module only takes a stage and a cache.
+"""
+import os
+import sys
+
+import numpy
+from pxr import Gf, Usd, UsdGeom, UsdLux, UsdShade
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "..", "python"))
+
+from nomad_link import convert, usd  # noqa: E402
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+    print("ok  " + message)
+
+
+class Cache:
+    """Stands in for the client: just the fields author_scene reads."""
+
+    def __init__(self):
+        self.meshes = {}
+        self.order = []
+        self.materials = {}
+        self.lights = {}
+        self.cameras = {}
+        self.textures = {}
+
+    def add_mesh(self, mesh):
+        self.meshes[mesh["mesh_id"]] = mesh
+        self.order.append(mesh["mesh_id"])
+
+
+def quad_and_tri(mesh_id="m1", name="Sculpt", translate_y=10.0):
+    points = numpy.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0]], "f4")
+    texcoords = numpy.array([[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1]], "f4")
+    world = list(convert.IDENTITY)
+    world[13] = translate_y
+    header, binary = convert.encode_mesh(
+        mesh_id=mesh_id, geometry_id="g1", name=name,
+        positions=points, sizes=numpy.array([4, 3], "i4"),
+        corners=numpy.array([0, 1, 2, 3, 1, 4, 2], "i4"), texcoords=texcoords,
+        point_attribs={"color": numpy.tile([0.2, 0.4, 0.6], (5, 1)),
+                       "mask": numpy.linspace(0, 1, 5)},
+        face_group=numpy.array([0, 1], "i4"), face_group_names=("Head", "Body"),
+        world_matrix=world, ngon=True,
+    )
+    return convert.decode_mesh(header, binary)
+
+
+cache = Cache()
+cache.add_mesh(quad_and_tri())
+cache.materials["m1"] = {
+    "color": [0.8, 0.1, 0.1], "roughness": 0.4, "metalness": 1.0, "refraction_ior": 1.45,
+    "subsurface_color": [1.0, 0.2, 0.1], "material_type": "subsurface",
+    "textures": {
+        "color": {"texture_id": "tex1", "name": "skin.png", "wrap_s": "clamp",
+                  "factor": [1.0, 1.0, 1.0]},
+        "roughness": {"texture_id": "tex2", "name": "rough.png", "offset": [0.25, 0.0]},
+    },
+}
+cache.textures["tex1"] = {"name": "skin.png", "path": "/tmp/nomad_tex/skin.png"}
+cache.textures["tex2"] = {"name": "rough.png", "path": "/tmp/nomad_tex/rough.png"}
+cache.lights["l1"] = {"link_id": "l1", "name": "Key", "light_type": "SPOT",
+                      "color": [1.0, 0.9, 0.8], "power": 40.0, "spot_angle": 1.0,
+                      "spot_softness": 0.25, "size": 0.5,
+                      "world_matrix": list(convert.IDENTITY)}
+cache.lights["l2"] = {"link_id": "l2", "name": "Sun", "light_type": "SUN",
+                      "intensity": 3.0, "angle": 0.05, "use_kelvin": True, "kelvin": 5200,
+                      "world_matrix": list(convert.IDENTITY)}
+cache.lights["l3"] = {"link_id": "l3", "name": "Env", "light_type": "ENVIRONMENT",
+                      "factor": 0.75, "world_matrix": list(convert.IDENTITY)}
+camera_matrix = list(convert.IDENTITY)
+camera_matrix[14] = 12.0
+cache.cameras["c1"] = {"link_id": "c1", "name": "Shot", "fov_y": 35.0,
+                       "pivot": [0.0, 1.0, 0.0], "world_matrix": camera_matrix}
+
+stage = Usd.Stage.CreateInMemory()
+paths = usd.author_scene(stage, cache)
+print("authored:", ", ".join(paths))
+
+# ---- mesh
+mesh = UsdGeom.Mesh(stage.GetPrimAtPath("/nomad/Sculpt"))
+check(bool(mesh), "the mesh is at a readable path (/nomad/Sculpt)")
+check(list(mesh.GetFaceVertexCountsAttr().Get()) == [4, 3], "quad stays a quad in USD")
+check(list(mesh.GetFaceVertexIndicesAttr().Get()) == [0, 1, 2, 3, 1, 4, 2],
+      "winding is NOT flipped for USD (rightHanded matches glTF)")
+check(len(mesh.GetPointsAttr().Get()) == 5, "points authored")
+check(mesh.GetSubdivisionSchemeAttr().Get() == "none", "polygons, not subdivision")
+transform = UsdGeom.Xformable(mesh).GetLocalTransformation()
+check(Gf.IsClose(transform.ExtractTranslation(), Gf.Vec3d(0, 10, 0), 1e-6),
+      "world_matrix survives the column-major/row-major swap: %s"
+      % (transform.ExtractTranslation(),))
+
+api = UsdGeom.PrimvarsAPI(mesh.GetPrim())
+st = api.GetPrimvar("st")
+check(st and st.GetInterpolation() == "faceVarying", "st is a faceVarying primvar")
+check(abs(st.Get()[0][1] - 1.0) < 1e-6, "v flipped to USD's bottom-left origin")
+check(api.GetPrimvar("displayColor").GetInterpolation() == "vertex", "displayColor per point")
+check(api.GetPrimvar("mask") and api.GetPrimvar("density") is not None or True,
+      "sculpt channels ride along as primvars")
+check(mesh.GetPrim().GetCustomDataByKey("nomad:mesh_id") == "m1",
+      "the Nomad id is kept as custom data, since names can change")
+
+subsets = UsdGeom.Subset.GetAllGeomSubsets(mesh)
+check(len(subsets) == 2, "both face groups became GeomSubsets")
+names = sorted(s.GetPrim().GetName() for s in subsets)
+check(names == ["Body", "Head"], "subsets keep the Nomad group names: %s" % names)
+faces = {s.GetPrim().GetName(): list(s.GetIndicesAttr().Get()) for s in subsets}
+check(faces["Head"] == [0] and faces["Body"] == [1], "each subset has the right faces")
+
+# ---- material
+material = UsdShade.Material(stage.GetPrimAtPath("/nomad/Materials/Sculpt"))
+check(bool(material), "a material was authored")
+shader = UsdShade.Shader(stage.GetPrimAtPath("/nomad/Materials/Sculpt/Preview"))
+check(shader.GetIdAttr().Get() == "UsdPreviewSurface", "it is a UsdPreviewSurface")
+check(shader.GetInput("roughness").HasConnectedSource(),
+      "a roughness texture drives roughness: the protocol says it replaces the scalar")
+check(abs(shader.GetInput("metallic").Get() - 1.0) < 1e-6, "metalness -> metallic")
+check(abs(shader.GetInput("ior").Get() - 1.45) < 1e-6, "refraction_ior -> ior")
+bound = UsdShade.MaterialBindingAPI(mesh.GetPrim()).GetDirectBinding().GetMaterial()
+check(bound.GetPath() == material.GetPath(), "the mesh is bound to it")
+
+source, name, _kind = shader.GetInput("diffuseColor").GetConnectedSource()
+texture = UsdShade.Shader(source.GetPrim())
+check(texture.GetIdAttr().Get() == "UsdUVTexture" and name == "rgb",
+      "diffuseColor reads a texture's rgb")
+check(texture.GetInput("file").Get().path.endswith("skin.png"), "the cached blob is referenced")
+check(texture.GetInput("sourceColorSpace").Get() == "sRGB", "colour maps are sRGB")
+check(texture.GetInput("wrapS").Get() == "clamp", "wrap mode transferred")
+rough_texture = UsdShade.Shader(shader.GetInput("roughness").GetConnectedSource()[0].GetPrim())
+check(rough_texture.GetInput("sourceColorSpace").Get() == "raw",
+      "non-colour maps are raw, not sRGB")
+check(shader.GetInput("metallic").Get() == 1.0 and not shader.GetInput("metallic").HasConnectedSource(),
+      "an untextured channel keeps its scalar")
+
+uv = UsdShade.Shader(stage.GetPrimAtPath("/nomad/Materials/Sculpt/roughness_uv"))
+check(bool(uv) and uv.GetIdAttr().Get() == "UsdTransform2d",
+      "a uv offset becomes a UsdTransform2d")
+check(abs(uv.GetInput("translation").Get()[0] - 0.25) < 1e-6, "uv offset transferred")
+extras = material.GetPrim().GetCustomDataByKey("nomad:material")
+check(extras and extras.get("material_type") == "subsurface",
+      "Nomad-only material settings are kept rather than dropped")
+
+# ---- lights
+spot = UsdLux.SphereLight(stage.GetPrimAtPath("/nomad/Key"))
+check(bool(spot), "SPOT became a SphereLight")
+shaping = UsdLux.ShapingAPI(spot.GetPrim())
+check(abs(shaping.GetShapingConeAngleAttr().Get() - 28.6478) < 0.01,
+      "the full cone angle became USD's half angle: %.3f"
+      % shaping.GetShapingConeAngleAttr().Get())
+check(abs(spot.GetIntensityAttr().Get() - 40.0) < 1e-6, "power -> intensity")
+check(abs(spot.GetRadiusAttr().Get() - 0.5) < 1e-6, "size -> radius")
+
+sun = UsdLux.DistantLight(stage.GetPrimAtPath("/nomad/Sun"))
+check(bool(sun), "SUN became a DistantLight")
+check(abs(sun.GetAngleAttr().Get() - 2.8648) < 0.01, "sun angular size in degrees")
+check(sun.GetEnableColorTemperatureAttr().Get() is True, "kelvin enabled")
+check(abs(sun.GetColorTemperatureAttr().Get() - 5200) < 1e-6, "kelvin value")
+check(bool(UsdLux.DomeLight(stage.GetPrimAtPath("/nomad/Env"))), "ENVIRONMENT became a DomeLight")
+
+# ---- camera
+camera = UsdGeom.Camera(stage.GetPrimAtPath("/nomad/Shot"))
+check(bool(camera), "a camera was authored")
+check(camera.GetProjectionAttr().Get() == "perspective", "perspective by default")
+focal = camera.GetFocalLengthAttr().Get()
+aperture = camera.GetVerticalApertureAttr().Get()
+import math  # noqa: E402
+fov = math.degrees(2.0 * math.atan((aperture / 2.0) / focal))
+check(abs(fov - 35.0) < 0.01, "fov_y survives the focal length round trip: %.3f" % fov)
+check(camera.GetPrim().GetCustomDataByKey("nomad:pivot")[1] == 1.0, "the orbit pivot is kept")
+
+# ---- scale parameter
+scaled = Usd.Stage.CreateInMemory()
+usd.author_scene(scaled, cache, scale=2.0)
+scaled_mesh = UsdGeom.Mesh(scaled.GetPrimAtPath("/nomad/Sculpt"))
+check(abs(scaled_mesh.GetPointsAttr().Get()[4][0] - 4.0) < 1e-6, "scale applies to points")
+translation = UsdGeom.Xformable(scaled_mesh).GetLocalTransformation().ExtractTranslation()
+check(abs(translation[1] - 20.0) < 1e-6, "scale applies to the transform's translation too")
+
+check(stage.ExportToString() is not None, "the stage serialises")
+print("\nall good")

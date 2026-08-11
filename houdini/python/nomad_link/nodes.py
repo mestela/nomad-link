@@ -18,6 +18,7 @@ from .client import DEFAULT_PORT, client
 
 IN_TYPE = "nomad_link_in"
 OUT_TYPE = "nomad_link_out"
+IMPORT_TYPE = "nomad_link_import"  # LOP: the whole scene onto a USD stage
 ID_NAMESPACE = uuid.UUID("6f9c1f2a-0e3d-4f1b-9a77-1a2b3c4d5e6f")
 
 # helper attributes the HDA's wrangles create, so topology reads as flat arrays
@@ -31,9 +32,13 @@ CHANNELS = (("Cd", "color", 3), ("Alpha", "alpha", 1), ("rough", "rough", 1),
 
 # ------------------------------------------------------------------ utilities
 
-def _instances(type_name):
-    node_type = hou.nodeType(hou.sopNodeTypeCategory(), type_name)
+def _instances(type_name, category=None):
+    node_type = hou.nodeType(category or hou.sopNodeTypeCategory(), type_name)
     return node_type.instances() if node_type else ()
+
+
+def _import_lops():
+    return _instances(IMPORT_TYPE, hou.lopNodeTypeCategory())
 
 
 def _eval(node, name, default=0):
@@ -65,12 +70,12 @@ def status_text():
 
 
 def refresh_inputs(revision):
-    """Called from the pump when the cache changed: dirty every In SOP."""
-    for node in _instances(IN_TYPE):
+    """Called from the pump when the cache changed: dirty every reading node."""
+    for node in list(_instances(IN_TYPE)) + list(_import_lops()):
         parm = node.parm("revision")
         if parm is not None and parm.eval() != revision:
             parm.set(revision)
-    for node in list(_instances(IN_TYPE)) + list(_instances(OUT_TYPE)):
+    for node in list(_instances(IN_TYPE)) + list(_instances(OUT_TYPE)) + list(_import_lops()):
         parm = node.parm("status")
         if parm is not None and parm.evalAsString() != status_text():
             parm.set(status_text())
@@ -245,6 +250,24 @@ def _face_groups(geo, meshes):
         base += max(len(mesh.get("face_group_names", ())), int(indices.max()) + 1 if count else 0)
     _set_attrib(geo, hou.attribType.Prim, "nomad_face_group",
                 numpy.concatenate(values), 1, 0.0, integer=True)
+
+
+# -------------------------------------------------------- Import LOP (Solaris)
+
+def cook_import(lop):
+    """Author the whole Nomad scene -- meshes, materials, lights, cameras -- on a stage."""
+    from . import usd  # only the LOP side needs pxr
+
+    _eval(lop, "revision")  # cook dependency: new Nomad data bumps this
+    usd.author_scene(
+        lop.editableStage(),
+        client(),
+        scale=_eval(lop, "scale", 1.0) or 1.0,
+        import_materials=bool(_eval(lop, "importmaterials", 1)),
+        import_lights=bool(_eval(lop, "importlights", 1)),
+        import_cameras=bool(_eval(lop, "importcameras", 1)),
+        light_scale=_eval(lop, "lightscale", 1.0),
+    )
 
 
 # -------------------------------------------------------------- Out SOP (write)

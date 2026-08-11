@@ -213,6 +213,32 @@ check(bool(bound.GetSurfaceOutput("mtlx").GetConnectedSource()),
 check(bool(UsdLux.SphereLight(usd_stage.GetPrimAtPath("/nomad/Key"))), "the spot light is a prim")
 check(bool(UsdGeom.Camera(usd_stage.GetPrimAtPath("/nomad/Shot"))), "the camera is a prim")
 
+# a texture: blob -> disk -> the material's image node (PROTOCOL.md 10.2)
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+       b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0"
+       b"\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0\x00\x00\x00\x00IEND\xaeB`\x82")
+nomad.send({"type": "material", "mesh_id": "m1", "material": {
+    "textures": {"color": {"texture_id": "tex-e2e", "name": "skin.png",
+                           "wrap_s": "clamp", "scale": [2.0, 1.0]}}}})
+check(wait(link, lambda: any(h.get("type") == "request_texture" for h, _ in nomad.received)),
+      "an unseen texture id is requested")
+nomad.send({"type": "texture", "texture_id": "tex-e2e", "name": "skin.png",
+            "binary_size": len(PNG)}, PNG)
+check(wait(link, lambda: "tex-e2e" in link.textures), "the blob arrives and is cached")
+cached = link.textures["tex-e2e"]["path"]
+check(os.path.isfile(cached) and open(cached, "rb").read() == PNG,
+      "the image file is on disk byte for byte: %s" % cached)
+
+textured = lop.stage()
+image = None
+for prim in textured.Traverse():
+    shader = UsdShade.Shader(prim)
+    if shader and shader.GetIdAttr().Get() in ("ND_image_color3", "UsdUVTexture"):
+        image = shader
+check(image is not None, "the material has an image node")
+check(image.GetInput("file").Get().path == cached,
+      "and it points at the cached blob: %s" % image.GetInput("file").Get().path)
+
 # a second light must show up without anyone touching the node
 revision = lop.evalParm("revision")
 nomad.send({"type": "light", "link_id": "l2", "name": "Rim", "light_type": "SUN",

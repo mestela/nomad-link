@@ -112,6 +112,12 @@ def disconnect_button(kwargs):
     refresh_inputs(client().revision)
 
 
+def enable_sync(kwargs):
+    """Turn on every live channel Nomad is currently withholding."""
+    client().set_session(live_sync=True, sync_objects=True, sync_lights=True,
+                         sync_materials=True, sync_cameras=True)
+
+
 def get_selection(kwargs):
     client().request("request_selection")
 

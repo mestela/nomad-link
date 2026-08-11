@@ -18,6 +18,7 @@ try:
         cook_in,
         cook_out,
         disconnect_button,
+        enable_sync,
         get_scene,
         get_selection,
         mesh_menu,
@@ -32,7 +33,8 @@ except ImportError:  # no hou: the codecs and the client still work
 
 __all__ = [
     "DEFAULT_PORT", "PROTOCOL", "client", "connect", "disconnect",
-    "connect_button", "disconnect_button", "get_scene", "get_selection",
+    "connect_button", "disconnect_button", "get_scene", "get_selection", "enable_sync",
+    "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
     "watch", "report",
@@ -48,13 +50,24 @@ def disconnect():
     client().disconnect()
 
 
+def sync_all():
+    """Ask Nomad to stream every channel: objects, lights, materials, cameras.
+
+    Nomad ships with sync_lights and sync_materials off, so light and material
+    edits only appear on an explicit Get Scene until this is set.
+    """
+    client().set_session(live_sync=True, sync_objects=True, sync_lights=True,
+                         sync_materials=True, sync_cameras=True)
+    return "asked Nomad to enable every sync channel"
+
+
 def watch(enable=True):
     """Log every message Nomad sends, so `report()` can show what actually arrived."""
     client().verbose = enable
     return "logging every message" if enable else "logging errors only"
 
 
-def report(lines=40):
+def report(lines=40, meshes=12):
     """Print what the link is doing. Paste this when something is not syncing."""
     link = client()
     print("status      : %s - %s" % (link.status, link.message))
@@ -67,10 +80,23 @@ def report(lines=40):
              len(link.cameras), len(link.textures)))
     channels = ("color", "alpha", "rough", "metallic", "mask", "density",
                 "texcoords", "face_group")
+    shared = {}
     for mesh_id in link.order:
+        mesh = link.meshes.get(mesh_id)
+        if mesh is not None:
+            shared.setdefault(mesh.get("geometry_id", mesh_id), []).append(mesh)
+    reused = sum(len(group) for group in shared.values() if len(group) > 1)
+    print("geometry    : %d unique, %d meshes reuse a shared geometry (instances)"
+          % (len(shared), reused))
+    for index, mesh_id in enumerate(link.order):
         mesh = link.meshes.get(mesh_id)
         if mesh is None:
             continue
+        if index == meshes and len(link.order) > meshes:
+            print("  ... and %d more meshes" % (len(link.order) - meshes))
+            break
+        if index >= meshes:
+            break
         print("  mesh     %-24s %6d pts  %-7s  %s" % (
             mesh["name"][:24], len(mesh["positions"]),
             "visible" if mesh.get("visible", True) else "HIDDEN",

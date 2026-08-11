@@ -141,6 +141,9 @@ def import_parm_group():
                 "Ask Nomad for its current selection."),
          button("getscene", "Get Scene", "get_scene",
                 "Ask Nomad for every object in the scene."),
+         button("enablesync", "Enable All Sync Channels", "enable_sync",
+                "Nomad ships with sync_lights and sync_materials off, so those "
+                "edits only arrive on an explicit Get Scene until this is set."),
          toggle("importmaterials", "Import Materials", True,
                 "Nomad's material block as UsdPreviewSurface, with its textures."),
          toggle("importlights", "Import Lights", True),

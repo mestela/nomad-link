@@ -32,6 +32,10 @@ MAPPING_NOTES = {
                   "density, OpenPBR's is a distance",
     "refraction_interior_roughness": "no OpenPBR input; kept in customData",
     "material_type": "additive, dithering and shadow_catcher have no OpenPBR equivalent",
+    "subsurface_depth": "absent means Nomad's 0.15 default, negative means auto and the "
+                        "magnitude is used; OpenPBR's own default radius is 1.0, a metre",
+    "translucency": "defaults to true on every material, so it does NOT drive subsurface; "
+                    "only material_type == subsurface scatters",
 }
 
 # scalar Nomad value -> OpenPBR input. Vertex paint or a texture replaces these
@@ -77,7 +81,7 @@ def author(stage, path, block, textures, mesh=None):
 
     kept = {key: value for key, value in block.items()
             if key in ("material_type", "refraction_interior_roughness", "shadow_color",
-                       "always_unlit", "flip_culling")}
+                       "always_unlit", "flip_culling", "translucency", "translucency_factor")}
     if kept:
         material.GetPrim().SetCustomDataByKey("nomad:material", kept)
     return material
@@ -188,20 +192,24 @@ def _transmission(shader, block):
 
 
 def _subsurface(shader, block):
-    subsurface = block.get("material_type") == "subsurface"
-    translucent = bool(block.get("translucency"))
-    if not (subsurface or translucent):
+    """Only material_type "subsurface" scatters.
+
+    `translucency` defaults to true on every Nomad material, so treating it as
+    subsurface turns scattering on for the whole scene.
+    """
+    if block.get("material_type") != "subsurface":
         return
-    weight = float(block.get("translucency_factor", 1.0)) if translucent else 1.0
     shader.CreateInput("subsurface_weight", Sdf.ValueTypeNames.Float).Set(
-        max(0.0, min(1.0, weight)))
+        max(0.0, min(1.0, float(block.get("translucency_factor", 1.0)))))
     colour = block.get("subsurface_color")
     if colour is not None:
         shader.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*colour[:3]))
-    depth = float(block.get("subsurface_depth", -1.0))
-    if depth > 0.0:  # negative means auto in Nomad, which is OpenPBR's default
-        shader.CreateInput("subsurface_radius", Sdf.ValueTypeNames.Float).Set(depth)
+    # Only edited fields travel, so an absent depth means Nomad's own default
+    # (0.15). Negative means auto, where the magnitude is the best guess we have.
+    # Anything is better than OpenPBR's default radius of 1.0, which is a metre.
+    depth = abs(float(block.get("subsurface_depth", 0.15))) or 0.15
+    shader.CreateInput("subsurface_radius", Sdf.ValueTypeNames.Float).Set(depth)
 
 
 def _emission(shader, block):

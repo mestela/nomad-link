@@ -83,6 +83,47 @@ check("ND_constant_color3" in feeds and openpbr.GEOMPROP_COLOR in feeds,
 paint = UsdShade.Shader(stage.GetPrimAtPath("/nomad/Materials/Skin/paint"))
 check(paint.GetInput("geomprop").Get() == "displayColor", "the primvar name is right")
 
+# translucency defaults to true on every Nomad material: it must not scatter
+plain = Cache()
+plain.add_mesh(quad_and_tri(mesh_id="p1", name="Plain"))
+plain.materials["p1"] = {"color": [0.8, 0.8, 0.8], "roughness": 0.5,
+                         "translucency": True, "translucency_factor": 1.0,
+                         "subsurface_depth": -0.00624, "material_type": "opaque"}
+plain_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(plain_stage, plain, material_style="openpbr")
+ps = UsdShade.Shader(plain_stage.GetPrimAtPath("/nomad/Materials/Plain/OpenPBR"))
+check(not ps.GetInput("subsurface_weight"),
+      "an opaque material does not scatter just because translucency defaults to true")
+
+# a real subsurface material, with Nomad's negative "auto" depth
+skin = Cache()
+skin.add_mesh(quad_and_tri(mesh_id="s1", name="Head"))
+skin.materials["s1"] = {"material_type": "subsurface", "subsurface_color": [1.0, 0.3, 0.2],
+                        "subsurface_depth": 0.00624, "translucency": True,
+                        "translucency_factor": 1.0}
+skin_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(skin_stage, skin, material_style="openpbr")
+ss = UsdShade.Shader(skin_stage.GetPrimAtPath("/nomad/Materials/Head/OpenPBR"))
+check(abs(ss.GetInput("subsurface_weight").Get() - 1.0) < 1e-6, "a subsurface material scatters")
+check(abs(ss.GetInput("subsurface_radius").Get() - 0.00624) < 1e-6,
+      "the sculpt's depth reaches subsurface_radius, not OpenPBR's 1 metre: %r"
+      % ss.GetInput("subsurface_radius").Get())
+
+# an auto (negative) depth uses the magnitude, and an absent one Nomad's default
+for value, expected, label in ((-0.008, 0.008, "auto (negative) depth uses its magnitude"),
+                               (None, 0.15, "an absent depth falls back to Nomad's 0.15")):
+    block = {"material_type": "subsurface"}
+    if value is not None:
+        block["subsurface_depth"] = value
+    case = Cache()
+    case.add_mesh(quad_and_tri(mesh_id="d1", name="Depth"))
+    case.materials["d1"] = block
+    case_stage = Usd.Stage.CreateInMemory()
+    usd.author_scene(case_stage, case, material_style="openpbr")
+    radius = UsdShade.Shader(case_stage.GetPrimAtPath(
+        "/nomad/Materials/Depth/OpenPBR")).GetInput("subsurface_radius").Get()
+    check(abs(radius - expected) < 1e-6, "%s (%r)" % (label, radius))
+
 # refraction with absorption
 glass = Cache()
 glass.add_mesh(quad_and_tri(mesh_id="g1", name="Glass"))

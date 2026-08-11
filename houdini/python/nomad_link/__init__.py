@@ -37,7 +37,7 @@ __all__ = [
     "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
-    "watch", "report",
+    "watch", "report", "material",
 ]
 
 
@@ -59,6 +59,34 @@ def sync_all():
     client().set_session(live_sync=True, sync_objects=True, sync_lights=True,
                          sync_materials=True, sync_cameras=True)
     return "asked Nomad to enable every sync channel"
+
+
+def material(which=None):
+    """Print the raw material block Nomad sent, to see what actually arrives.
+
+    `which` is a mesh name or mesh_id; omit it to list what has materials.
+    """
+    link = client()
+    by_name = {}
+    for mesh_id, block in link.materials.items():
+        mesh = link.meshes.get(mesh_id)
+        by_name[mesh["name"] if mesh else mesh_id] = (mesh_id, block)
+    if which is None:
+        print("materials for: %s" % ", ".join(sorted(by_name)[:20]))
+        print("call nomad_link.material('<name>') for one of them")
+        return
+    found = by_name.get(which) or (which, link.materials.get(which))
+    mesh_id, block = found
+    if not block:
+        print("no material cached for %r" % which)
+        return
+    print("material for %s (%s)" % (which, mesh_id))
+    for key in sorted(block):
+        if key == "textures":
+            for channel, values in sorted(block[key].items()):
+                print("  texture.%-22s %s" % (channel, values))
+        else:
+            print("  %-30s %r" % (key, block[key]))
 
 
 def watch(enable=True):

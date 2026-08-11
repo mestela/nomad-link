@@ -173,9 +173,15 @@ class Client:
         Nomad owns these settings; a stale base_revision is answered with the
         current config instead of applying the change, so we echo what we have.
         """
-        header = {"type": "set_session_config",
-                  "base_revision": int(self.session_config.get("revision", 0))}
+        # echo the whole config with our overrides on top: a partial message risks
+        # being read as "every flag I left out is off"
+        header = {key: value for key, value in self.session_config.items()
+                  if key.startswith("sync_") or key in ("live_sync", "sync_mode")}
         header.update(flags)
+        header["type"] = "set_session_config"
+        header["base_revision"] = int(self.session_config.get("revision", 0))
+        self.note("-> set_session_config %s" % sorted(
+            key for key, value in header.items() if key.startswith("sync_") and value))
         return self.send(header)
 
     def request(self, kind, link_id=""):

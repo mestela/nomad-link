@@ -19,6 +19,9 @@ import math
 import numpy
 from pxr import Gf, Sdf, Tf, UsdGeom, UsdLux, UsdShade, Vt
 
+from . import convert
+
+IDENTITY = convert.IDENTITY
 ROOT = "/nomad"
 MATERIALS = ROOT + "/Materials"
 
@@ -108,36 +111,57 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
             materials[mesh_id] = author_material(stage, path, block, cache.textures, mesh)
             written.append(path)
 
+    # objects nest under their parent when Nomad names one, else under /nomad
+    entries = {}
     for mesh_id in cache.order:
-        mesh = cache.meshes.get(mesh_id)
-        if mesh is None:
-            continue
-        path = unique_child(ROOT, mesh["name"], taken)
-        prim = author_mesh(stage, path, mesh, scale=scale)
-        material = materials.get(mesh_id)
-        if material is not None:
-            UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
-            UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)
-        written.append(path)
-
+        if mesh_id in cache.meshes:
+            entries[mesh_id] = ("mesh", cache.meshes[mesh_id])
     if import_lights:
-        for light in cache.lights.values():
-            path = unique_child(ROOT, light.get("name", "light"), taken)
-            author_light(stage, path, light, scale=scale, light_scale=light_scale)
-            written.append(path)
-
+        for link_id, light in cache.lights.items():
+            entries[link_id] = ("light", light)
     if import_cameras:
-        for camera in cache.cameras.values():
-            path = unique_child(ROOT, camera.get("name", "camera"), taken)
-            author_camera(stage, path, camera, scale=scale)
-            written.append(path)
+        for link_id, camera in cache.cameras.items():
+            entries[link_id] = ("camera", camera)
 
+    children = {}
+    for link_id, (_kind, entry) in entries.items():
+        parent = entry.get("parent_id") or ""
+        children.setdefault(parent if parent in entries else "", []).append(link_id)
+
+    names = {"": taken}
+
+    def author_branch(parent_id, parent_path):
+        for link_id in children.get(parent_id, ()):
+            kind, entry = entries[link_id]
+            label = entry.get("name") or kind
+            path = unique_child(parent_path, label, names.setdefault(parent_id, set()))
+            world = entry.get("world_matrix", IDENTITY)
+            local = world
+            if parent_id:
+                parent_entry = entries[parent_id][1]
+                local = entry.get("local_matrix") or convert.compose_local(
+                    world, parent_entry.get("world_matrix", IDENTITY))
+            if kind == "mesh":
+                prim = author_mesh(stage, path, entry, scale=scale, matrix_values=local)
+                material = materials.get(link_id)
+                if material is not None:
+                    UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
+                    UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)
+            elif kind == "light":
+                author_light(stage, path, entry, scale=scale, light_scale=light_scale,
+                             matrix_values=local)
+            else:
+                author_camera(stage, path, entry, scale=scale, matrix_values=local)
+            written.append(path)
+            author_branch(link_id, path)
+
+    author_branch("", ROOT)
     return written
 
 
 # ----------------------------------------------------------------------- mesh
 
-def author_mesh(stage, path, mesh, scale=1.0):
+def author_mesh(stage, path, mesh, scale=1.0, matrix_values=None):
     geom = UsdGeom.Mesh.Define(stage, path)
     prim = geom.GetPrim()
 
@@ -154,7 +178,8 @@ def author_mesh(stage, path, mesh, scale=1.0):
         geom.CreateNormalsAttr(_array(normals, Vt.Vec3fArray, "f4"))
         geom.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
 
-    UsdGeom.Xformable(prim).AddTransformOp().Set(matrix(scaled_matrix(mesh["world_matrix"], scale)))
+    values = mesh["world_matrix"] if matrix_values is None else matrix_values
+    UsdGeom.Xformable(prim).AddTransformOp().Set(matrix(scaled_matrix(values, scale)))
     if not mesh.get("visible", True):
         UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
 
@@ -339,7 +364,7 @@ def uv_transform(stage, path, name, channel, reader):
 
 # ---------------------------------------------------------------------- light
 
-def author_light(stage, path, light, scale=1.0, light_scale=1.0):
+def author_light(stage, path, light, scale=1.0, light_scale=1.0, matrix_values=None):
     kind = str(light.get("light_type", "POINT")).upper()
     if kind == "SUN":
         prim = UsdLux.DistantLight.Define(stage, path)
@@ -375,8 +400,8 @@ def author_light(stage, path, light, scale=1.0, light_scale=1.0):
     if "shadow_cast" in light:
         UsdLux.ShadowAPI.Apply(prim.GetPrim()).CreateShadowEnableAttr(bool(light["shadow_cast"]))
 
-    UsdGeom.Xformable(prim.GetPrim()).AddTransformOp().Set(
-        matrix(scaled_matrix(light.get("world_matrix", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), scale)))
+    values = light.get("world_matrix", IDENTITY) if matrix_values is None else matrix_values
+    UsdGeom.Xformable(prim.GetPrim()).AddTransformOp().Set(matrix(scaled_matrix(values, scale)))
     if not light.get("visible", True):
         UsdGeom.Imageable(prim.GetPrim()).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
     prim.GetPrim().SetCustomDataByKey("nomad:link_id", light.get("link_id", ""))
@@ -385,7 +410,7 @@ def author_light(stage, path, light, scale=1.0, light_scale=1.0):
 
 # --------------------------------------------------------------------- camera
 
-def author_camera(stage, path, camera, scale=1.0, aperture=24.0):
+def author_camera(stage, path, camera, scale=1.0, aperture=24.0, matrix_values=None):
     """Nomad and USD cameras both look down -Z with +Y up, so the matrix transfers."""
     geom = UsdGeom.Camera.Define(stage, path)
     if camera.get("orthographic"):
@@ -402,8 +427,8 @@ def author_camera(stage, path, camera, scale=1.0, aperture=24.0):
         geom.CreateFocalLengthAttr((aperture / 2.0) / math.tan(fov / 2.0))
 
     geom.CreateClippingRangeAttr(Gf.Vec2f(0.01 * scale, 1000000.0 * scale))
-    UsdGeom.Xformable(geom.GetPrim()).AddTransformOp().Set(
-        matrix(scaled_matrix(camera.get("world_matrix", [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), scale)))
+    values = camera.get("world_matrix", IDENTITY) if matrix_values is None else matrix_values
+    UsdGeom.Xformable(geom.GetPrim()).AddTransformOp().Set(matrix(scaled_matrix(values, scale)))
     prim = geom.GetPrim()
     prim.SetCustomDataByKey("nomad:link_id", camera.get("link_id", ""))
     if "pivot" in camera:

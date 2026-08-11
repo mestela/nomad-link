@@ -213,5 +213,39 @@ bare_mesh = UsdGeom.Mesh(bare_stage.GetPrimAtPath("/nomad/Bare"))
 bound_bare = UsdShade.MaterialBindingAPI(bare_mesh.GetPrim()).GetDirectBinding().GetMaterial()
 check(bool(bound_bare), "a painted mesh gets a material even with no material message")
 
+# ---- hierarchy: not in protocol 1, supported for when it is
+nested = Cache()
+parent = quad_and_tri(mesh_id="p1", name="Body", translate_y=10.0)
+child = quad_and_tri(mesh_id="p2", name="Hand", translate_y=14.0)
+child["parent_id"] = "p1"
+nested.add_mesh(parent)
+nested.add_mesh(child)
+nested.lights["nl"] = {"link_id": "nl", "name": "Held", "light_type": "POINT",
+                       "parent_id": "p2", "power": 5.0,
+                       "world_matrix": list(convert.IDENTITY)}
+nested_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(nested_stage, nested)
+paths = [p.GetPath().pathString for p in nested_stage.Traverse()]
+check("/nomad/Body/Hand" in paths, "a child mesh nests under its parent: %s" % paths)
+check("/nomad/Body/Hand/Held" in paths, "lights nest too")
+local = UsdGeom.Xformable(nested_stage.GetPrimAtPath("/nomad/Body/Hand")).GetLocalTransformation()
+check(abs(local.ExtractTranslation()[1] - 4.0) < 1e-6,
+      "the child carries the difference, not the world matrix (%.3f, expected 4)"
+      % local.ExtractTranslation()[1])
+world = UsdGeom.Xformable(nested_stage.GetPrimAtPath("/nomad/Body/Hand")).ComputeLocalToWorldTransform(0)
+check(abs(world.ExtractTranslation()[1] - 14.0) < 1e-6,
+      "so the child still lands at its Nomad world position (%.3f, expected 14)"
+      % world.ExtractTranslation()[1])
+
+# an unknown parent must not lose the object
+orphan = Cache()
+lost = quad_and_tri(mesh_id="o1", name="Orphan")
+lost["parent_id"] = "not-here"
+orphan.add_mesh(lost)
+orphan_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(orphan_stage, orphan)
+check(bool(orphan_stage.GetPrimAtPath("/nomad/Orphan")),
+      "an object whose parent never arrived still lands at the root")
+
 check(stage.ExportToString() is not None, "the stage serialises")
 print("\nall good")

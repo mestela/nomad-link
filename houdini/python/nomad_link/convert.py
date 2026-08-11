@@ -109,6 +109,9 @@ def decode_mesh(header, binary):
         # mesh_full does not document `visible` (only object_state and
         # mesh_instance do), but honour it if Nomad sends one anyway
         "visible": bool(header.get("visible", True)),
+        # not in protocol 1: an id identifying this object's parent, so a
+        # hierarchy can be rebuilt. Harmless when absent, used when present.
+        "parent_id": header.get("parent_id", ""),
         "smooth_shading": bool(header.get("smooth_shading", True)),
         "positions": _read(binary, header["position_offset"], count * 3, "<f4").reshape(-1, 3).copy(),
     }
@@ -277,6 +280,18 @@ def encode_mesh(*, mesh_id, geometry_id, name, positions, sizes, corners,
 def _pack_unit(values, scale, dtype):
     unit = numpy.clip(numpy.asarray(values, numpy.float32), 0.0, 1.0)
     return numpy.round(unit * scale).astype(dtype)
+
+
+def compose_local(child, parent):
+    """child world matrix relative to parent world matrix, both column-major 16.
+
+    Nomad sends world matrices. Nesting prims under a parent means the parent's
+    transform applies too, so the child has to carry only the difference.
+    """
+    child_m = numpy.array(child, numpy.float64).reshape(4, 4, order="F")
+    parent_m = numpy.array(parent, numpy.float64).reshape(4, 4, order="F")
+    local = numpy.linalg.inv(parent_m) @ child_m
+    return list(local.flatten(order="F"))
 
 
 def transform_points(positions, matrix, inverse=False):

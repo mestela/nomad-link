@@ -65,6 +65,16 @@ def report(lines=40):
     print("cached      : %d meshes, %d materials, %d lights, %d cameras, %d textures"
           % (len(link.meshes), len(link.materials), len(link.lights),
              len(link.cameras), len(link.textures)))
+    channels = ("color", "alpha", "rough", "metallic", "mask", "density",
+                "texcoords", "face_group")
+    for mesh_id in link.order:
+        mesh = link.meshes.get(mesh_id)
+        if mesh is None:
+            continue
+        print("  mesh     %-24s %6d pts  %-7s  %s" % (
+            mesh["name"][:24], len(mesh["positions"]),
+            "visible" if mesh.get("visible", True) else "HIDDEN",
+            " ".join(key for key in channels if key in mesh) or "positions only"))
     for name, store in (("lights", link.lights), ("cameras", link.cameras)):
         for link_id, entry in store.items():
             print("  %-8s %-24s %s" % (name[:-1], entry.get("name", "?"), link_id))

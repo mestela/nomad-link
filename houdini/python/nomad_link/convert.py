@@ -106,7 +106,9 @@ def decode_mesh(header, binary):
         "geometry_id": header.get("geometry_id", ""),
         "name": header.get("name", "nomad"),
         "world_matrix": list(header.get("world_matrix", IDENTITY)),
-        "visible": True,
+        # mesh_full does not document `visible` (only object_state and
+        # mesh_instance do), but honour it if Nomad sends one anyway
+        "visible": bool(header.get("visible", True)),
         "smooth_shading": bool(header.get("smooth_shading", True)),
         "positions": _read(binary, header["position_offset"], count * 3, "<f4").reshape(-1, 3).copy(),
     }

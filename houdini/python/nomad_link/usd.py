@@ -36,6 +36,20 @@ TEXTURE_INPUTS = {
 CHANNEL_SUFFIX = {"color": "rgb", "emissive": "rgb", "normal": "rgb"}
 WRAP = {"repeat": "repeat", "clamp": "clamp", "mirror": "mirror"}
 
+# Nomad paints per vertex, so a channel the user has painted must be read from a
+# primvar rather than taken from the material's single value:
+#   nomad channel -> (mesh key, primvar, reader id, value type, shader input)
+PAINT_CHANNELS = {
+    "color": ("color", "displayColor", "UsdPrimvarReader_float3",
+              Sdf.ValueTypeNames.Color3f, "diffuseColor"),
+    "opacity": ("alpha", "displayOpacity", "UsdPrimvarReader_float",
+                Sdf.ValueTypeNames.Float, "opacity"),
+    "roughness": ("rough", "rough", "UsdPrimvarReader_float",
+                  Sdf.ValueTypeNames.Float, "roughness"),
+    "metalness": ("metallic", "metallic", "UsdPrimvarReader_float",
+                  Sdf.ValueTypeNames.Float, "metallic"),
+}
+
 
 def _array(values, vt_type, dtype):
     flat = numpy.ascontiguousarray(values, dtype)
@@ -77,14 +91,21 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
     taken = set()
 
     materials = {}
-    if import_materials and cache.materials:
-        UsdGeom.Scope.Define(stage, MATERIALS)
+    if import_materials:
+        # a painted mesh needs a material even when Nomad sent no material block,
+        # otherwise its vertex paint has nothing to render through
+        painted = {mesh_id for mesh_id, mesh in cache.meshes.items()
+                   if any(spec[0] in mesh for spec in PAINT_CHANNELS.values())}
+        wanted = [mesh_id for mesh_id in cache.order if mesh_id in cache.materials or mesh_id in painted]
+        if wanted:
+            UsdGeom.Scope.Define(stage, MATERIALS)
         material_names = set()
-        for mesh_id, block in cache.materials.items():
+        for mesh_id in wanted:
             mesh = cache.meshes.get(mesh_id)
+            block = cache.materials.get(mesh_id, {})
             name = mesh["name"] if mesh else mesh_id
             path = unique_child(MATERIALS, name, material_names)
-            materials[mesh_id] = author_material(stage, path, block, cache.textures)
+            materials[mesh_id] = author_material(stage, path, block, cache.textures, mesh)
             written.append(path)
 
     for mesh_id in cache.order:
@@ -204,7 +225,7 @@ def scaled_matrix(values, scale):
 
 # ------------------------------------------------------------------- material
 
-def author_material(stage, path, block, textures):
+def author_material(stage, path, block, textures, mesh=None):
     material = UsdShade.Material.Define(stage, path)
     shader = UsdShade.Shader.Define(stage, path + "/Preview")
     shader.CreateIdAttr("UsdPreviewSurface")
@@ -215,13 +236,18 @@ def author_material(stage, path, block, textures):
     # so do not author a value the texture connection would only override
     textured = {name for name, channel in channels.items()
                 if textures.get(channel.get("texture_id"))}
+    # likewise for vertex paint, which is what most Nomad sculpts actually carry
+    painted = {name for name, spec in PAINT_CHANNELS.items()
+               if name not in textured and mesh is not None and spec[0] in mesh}
+    for name in painted:
+        author_paint_reader(stage, path, shader, name)
 
     colour = block.get("color")
-    if colour is not None and "color" not in textured:
+    if colour is not None and not {"color"} & (textured | painted):
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*colour[:3]))
     for key, name in (("roughness", "roughness"), ("metalness", "metallic"),
                       ("opacity", "opacity")):
-        if key in block and key not in textured:
+        if key in block and key not in textured and key not in painted:
             shader.CreateInput(name, Sdf.ValueTypeNames.Float).Set(float(block[key]))
     if "refraction_ior" in block:
         shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(float(block["refraction_ior"]))
@@ -244,6 +270,17 @@ def author_material(stage, path, block, textures):
     if extras:
         material.GetPrim().SetCustomDataByKey("nomad:material", extras)
     return material
+
+
+def author_paint_reader(stage, path, shader, name):
+    """Read a painted channel off the mesh's primvar instead of a flat value."""
+    _key, primvar, reader_id, value_type, shader_input = PAINT_CHANNELS[name]
+    node = UsdShade.Shader.Define(stage, "%s/%s_paint" % (path, Tf.MakeValidIdentifier(name)))
+    node.CreateIdAttr(reader_id)
+    node.CreateInput("varname", Sdf.ValueTypeNames.Token).Set(primvar)
+    node.CreateOutput("result", value_type)
+    shader.CreateInput(shader_input, value_type).ConnectToSource(node.ConnectableAPI(), "result")
+    return node
 
 
 def author_texture(stage, path, shader, reader, name, channel, textures):

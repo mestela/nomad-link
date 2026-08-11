@@ -188,5 +188,30 @@ check(abs(scaled_mesh.GetPointsAttr().Get()[4][0] - 4.0) < 1e-6, "scale applies 
 translation = UsdGeom.Xformable(scaled_mesh).GetLocalTransformation().ExtractTranslation()
 check(abs(translation[1] - 20.0) < 1e-6, "scale applies to the transform's translation too")
 
+# ---- vertex paint: Nomad paints per vertex, so it must render through primvars
+paint_cache = Cache()
+paint_cache.add_mesh(quad_and_tri(mesh_id="m2", name="Painted"))
+paint_cache.materials["m2"] = {"color": [1.0, 1.0, 1.0], "roughness": 0.5, "metalness": 0.0}
+painted_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(painted_stage, paint_cache)
+painted = UsdShade.Shader(painted_stage.GetPrimAtPath("/nomad/Materials/Painted/Preview"))
+check(painted.GetInput("diffuseColor").HasConnectedSource(),
+      "a painted mesh drives diffuseColor from a primvar, not a flat colour")
+reader = UsdShade.Shader(painted.GetInput("diffuseColor").GetConnectedSource()[0].GetPrim())
+check(reader.GetIdAttr().Get() == "UsdPrimvarReader_float3", "colour uses a float3 primvar reader")
+check(reader.GetInput("varname").Get() == "displayColor", "it reads displayColor")
+check(not painted.GetInput("roughness").HasConnectedSource()
+      and abs(painted.GetInput("roughness").Get() - 0.5) < 1e-6,
+      "an unpainted channel still uses the material value")
+
+# paint with no material block at all must still get a material to render through
+bare = Cache()
+bare.add_mesh(quad_and_tri(mesh_id="m3", name="Bare"))
+bare_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(bare_stage, bare)
+bare_mesh = UsdGeom.Mesh(bare_stage.GetPrimAtPath("/nomad/Bare"))
+bound_bare = UsdShade.MaterialBindingAPI(bare_mesh.GetPrim()).GetDirectBinding().GetMaterial()
+check(bool(bound_bare), "a painted mesh gets a material even with no material message")
+
 check(stage.ExportToString() is not None, "the stage serialises")
 print("\nall good")

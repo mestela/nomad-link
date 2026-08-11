@@ -117,6 +117,9 @@ def get_selection(kwargs):
 
 
 def get_scene(kwargs):
+    # a scene transfer is a replacement, not a merge: without this, objects
+    # deleted in Nomad linger here forever because nothing announces them
+    client().clear_scene()
     client().request("request_scene")
 
 

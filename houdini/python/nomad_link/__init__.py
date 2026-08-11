@@ -35,6 +35,7 @@ __all__ = [
     "connect_button", "disconnect_button", "get_scene", "get_selection",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
+    "watch", "report",
 ]
 
 
@@ -45,3 +46,28 @@ def connect(host="", port=DEFAULT_PORT):
 
 def disconnect():
     client().disconnect()
+
+
+def watch(enable=True):
+    """Log every message Nomad sends, so `report()` can show what actually arrived."""
+    client().verbose = enable
+    return "logging every message" if enable else "logging errors only"
+
+
+def report(lines=40):
+    """Print what the link is doing. Paste this when something is not syncing."""
+    link = client()
+    print("status      : %s - %s" % (link.status, link.message))
+    print("nomad       : %s at %s:%s" % (link.nomad_version, link.host, link.port))
+    print("nomad can   : %s" % ", ".join(sorted(link.peer_capabilities)))
+    config = {key: value for key, value in link.session_config.items() if key != "type"}
+    print("session     : %s" % config)
+    print("cached      : %d meshes, %d materials, %d lights, %d cameras, %d textures"
+          % (len(link.meshes), len(link.materials), len(link.lights),
+             len(link.cameras), len(link.textures)))
+    for name, store in (("lights", link.lights), ("cameras", link.cameras)):
+        for link_id, entry in store.items():
+            print("  %-8s %-24s %s" % (name[:-1], entry.get("name", "?"), link_id))
+    print("recent      :")
+    for line in link.log[-lines:]:
+        print("  " + line)

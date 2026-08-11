@@ -109,6 +109,7 @@ class Client:
         self.working_camera = {}  # newest `camera` message: Nomad's own viewport
         self.revision = 0         # bumped whenever the cache changes
         self.log = []
+        self.verbose = False      # nomad_link.watch(): log every message that arrives
         self._pending_acks = {}   # request_id -> node path waiting for its mesh_id
         self._requested = set()   # mesh_ids we already asked a mesh_full for
         self._requested_textures = set()
@@ -156,6 +157,16 @@ class Client:
     def send(self, header, binary=b""):
         return self.connection.send(header, binary)
 
+    def clear_scene(self):
+        """Forget every object. Textures are immutable per id, so they survive."""
+        self.meshes.clear()
+        self.materials.clear()
+        self.lights.clear()
+        self.cameras.clear()
+        del self.order[:]
+        self._requested.clear()
+        self._touch()
+
     def request(self, kind, link_id=""):
         header = {"type": kind, "request_id": uuid.uuid4().hex}
         if link_id:
@@ -184,10 +195,18 @@ class Client:
             pass
         self._callback = None
 
+    def describe(self, header):
+        kind = header.get("type", "?")
+        who = header.get("name") or header.get("link_id") or header.get("mesh_id") or ""
+        live = " live" if header.get("live_sync") else ""
+        return "<- %-16s %s%s" % (kind, str(who)[:24], live)
+
     def pump(self):
         """Drain the socket queue. Main thread only (event loop or hython loop)."""
         before = self.revision
         for header, binary in self.connection.poll():
+            if self.verbose:
+                self.note(self.describe(header))
             try:
                 self._handle(header, binary)
             except Exception as exc:  # never let one bad packet kill the callback

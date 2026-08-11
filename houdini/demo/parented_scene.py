@@ -99,17 +99,18 @@ def main():
           flush=True)
 
     packets = scene_packets()
-    sent = 0
+    served = 0
     answered = 0
     try:
         while True:
             time.sleep(0.2)
-            if nomad.ready.is_set() and not sent:
+            if nomad.connections > served:  # a fresh Connect gets the scene again
+                served = nomad.connections
+                answered = 0
                 for header, binary in packets:
                     nomad.send(header, binary)
-                sent = 1
-                print("sent %d objects (%d meshes, 1 light, 1 hidden)"
-                      % (len(packets), len(OBJECTS)), flush=True)
+                print("sent %d objects (%d meshes, 1 light, 1 hidden) to connection %d"
+                      % (len(packets), len(OBJECTS), served), flush=True)
             requests = [h for h, _ in nomad.received
                         if h.get("type") in ("request_scene", "request_selection")]
             if len(requests) > answered:

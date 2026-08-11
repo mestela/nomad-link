@@ -92,7 +92,9 @@ def scene_packets():
 
 
 def main():
-    nomad = MockNomad(PORT)
+    # the version shows up in the node's Status, so there is no doubt which
+    # end Houdini is actually talking to
+    nomad = MockNomad(PORT, version="DEMO-parented-scene")
     nomad.start()
     print(__doc__.split("Then in Houdini")[0].strip())
     print("\nlistening on 127.0.0.1:%d -- connect Houdini with Host 127.0.0.1" % PORT,

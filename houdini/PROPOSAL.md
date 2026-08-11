@@ -19,6 +19,15 @@ matters more in USD than in Blender: Solaris addresses everything by prim path,
 so hierarchy is how you write rules, apply variants, or override a branch.
 Rebuilding it by hand for every transfer is not practical.
 
+**Nomad already has this.** Exporting the same scene as glTF or USD preserves
+the hierarchy, so the relationships exist internally and are already serialised
+by two other code paths — Link is the only one that drops them. That is
+understandable: Link carries live *edits*, and a world matrix places an object
+correctly whether or not the receiver knows its parent. Hierarchy only starts
+to matter when the receiver represents the scene rather than just drawing it.
+It also suggests the sending side is small, since glTF's node hierarchy needs
+the same parent-and-local-transform information this asks for.
+
 **Proposal.** An optional `parent_id` on the object messages — `mesh_full`,
 `mesh_instance`, `object_state`, `light`, `camera_object`:
 

@@ -8,10 +8,12 @@ import time
 
 
 class MockNomad(threading.Thread):
-    def __init__(self, port, capabilities=("ngon", "scene_transfer", "selection_transfer")):
+    def __init__(self, port, capabilities=("ngon", "scene_transfer", "selection_transfer"),
+                 version="2.0"):
         threading.Thread.__init__(self, daemon=True)
         self.port = port
         self.capabilities = list(capabilities)
+        self.version = version
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server.bind(("127.0.0.1", port))
@@ -53,7 +55,7 @@ class MockNomad(threading.Thread):
                 if header.get("type") == "hello":
                     self.hello = header
                     self.connections += 1
-                    self.send({"type": "hello", "protocol": 1, "nomad_version": "2.0",
+                    self.send({"type": "hello", "protocol": 1, "nomad_version": self.version,
                                "capabilities": self.capabilities, "pair_token": "token123"})
                     self.ready.set()
                 elif header.get("type") != "ping":

@@ -255,7 +255,9 @@ class Client:
         if kind == "hello":
             self.nomad_version = header.get("nomad_version", "?")
             self.peer_capabilities = set(header.get("capabilities", []))
-            self.message = "Connected to Nomad %s" % self.nomad_version
+            # name the host: connecting to the iPad when you meant the demo (or the
+            # reverse) otherwise looks identical from the node
+            self.message = "Connected to Nomad %s at %s" % (self.nomad_version, self.host)
             token = header.get("pair_token")
             if token:
                 _save_token(self.host, token)

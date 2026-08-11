@@ -413,5 +413,7 @@ class Client:
 
     def send_mesh(self, header, binary, node_path=""):
         if node_path:
+            if len(self._pending_acks) > 64:
+                self._pending_acks.clear()  # acks that never came must not pile up
             self._pending_acks[header.get("request_id", "")] = node_path
         return self.send(header, binary)

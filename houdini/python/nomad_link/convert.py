@@ -270,7 +270,8 @@ def encode_mesh(*, mesh_id, geometry_id, name, positions, sizes, corners,
     if groups is not None:
         header["face_group_offset"] = len(binary)
         header["face_group_format"] = "uint16"
-        binary.extend(numpy.clip(groups, 0, 65535).astype("<u2").tobytes())
+        # uint16 on the wire, but 0.11.36 documents ids as <= 32767
+        binary.extend(numpy.clip(groups, 0, 32767).astype("<u2").tobytes())
         header["face_groups"] = [{"name": str(n)} for n in face_group_names]
 
     header["binary_size"] = len(binary)

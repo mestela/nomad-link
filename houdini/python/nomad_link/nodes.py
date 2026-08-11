@@ -275,6 +275,7 @@ def cook_import(lop):
         import_materials=bool(_eval(lop, "importmaterials", 1)),
         import_lights=bool(_eval(lop, "importlights", 1)),
         import_cameras=bool(_eval(lop, "importcameras", 1)),
+        import_environment=bool(_eval(lop, "importenv", 1)),
         light_scale=_eval(lop, "lightscale", 1.0),
         material_style=_eval(lop, "matstyle", "openpbr") or "openpbr",
     )

@@ -37,7 +37,7 @@ __all__ = [
     "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
-    "watch", "report", "material",
+    "watch", "report", "material", "display",
 ]
 
 
@@ -87,6 +87,24 @@ def material(which=None):
                 print("  texture.%-22s %s" % (channel, values))
         else:
             print("  %-30s %r" % (key, block[key]))
+
+
+def display(kind="env"):
+    """Print Nomad's display settings. `kind` filters by prefix, "" for all.
+
+    The keys come from Nomad's settings files rather than PROTOCOL.md, so this
+    is how we learn what a given version actually calls things.
+    """
+    settings = client().display
+    if not settings:
+        print("no display_config received yet -- press Get Scene while connected")
+        return
+    keys = sorted(key for key in settings if key.startswith(kind))
+    if not keys:
+        print("no %r keys; the full set is: %s" % (kind, ", ".join(sorted(settings))))
+        return
+    for key in keys:
+        print("  %-28s %r" % (key, settings[key]))
 
 
 def watch(enable=True):

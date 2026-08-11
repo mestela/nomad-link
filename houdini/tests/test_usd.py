@@ -218,3 +218,36 @@ check(bool(orphan_stage.GetPrimAtPath("/nomad/Orphan")),
 
 check(stage.ExportToString() is not None, "the stage serialises")
 print("\nall good")
+
+# ---- environment: Nomad's display_config as a DomeLight
+class DisplayCache(Cache):
+    def __init__(self, display):
+        Cache.__init__(self)
+        self.display = display
+
+
+env_cache = DisplayCache({"env_intensity": 2.5, "env_rotation": 1.5708,
+                          "env_texture_id": "envtex", "background_blur": 0.4,
+                          "shader_type": 1, "pp_bloom_enable": True})
+env_cache.textures["envtex"] = {"name": "studio.hdr", "path": "/tmp/nomad_tex/studio.hdr"}
+env_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(env_stage, env_cache, material_style="preview")
+dome = UsdLux.DomeLight(env_stage.GetPrimAtPath("/nomad/Environment"))
+check(bool(dome), "the environment became a DomeLight")
+check(abs(dome.GetIntensityAttr().Get() - 2.5) < 1e-6, "env intensity transferred")
+check(dome.GetTextureFileAttr().Get().path.endswith("studio.hdr"),
+      "the environment texture is referenced when Nomad sends the blob")
+check(dome.GetTextureFormatAttr().Get() == "latlong", "latlong, as Nomad's environments are")
+rotation = UsdGeom.Xformable(dome.GetPrim()).GetOrderedXformOps()
+check(rotation and abs(rotation[0].Get() - 90.0) < 0.01,
+      "radians became degrees about Y: %s" % (rotation[0].Get() if rotation else None))
+kept = dome.GetPrim().GetCustomDataByKey("nomad:environment")
+check(kept and "background_blur" in kept and "shader_type" not in kept,
+      "the environment block is kept, postprocess settings are not")
+
+no_env = Usd.Stage.CreateInMemory()
+usd.author_scene(no_env, DisplayCache({"shader_type": 1}), material_style="preview")
+check(not no_env.GetPrimAtPath("/nomad/Environment"),
+      "no DomeLight when Nomad sent no environment settings")
+
+print("\nenvironment ok")

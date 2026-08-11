@@ -157,6 +157,8 @@ def import_parm_group():
          style,
          toggle("importlights", "Import Lights", True),
          toggle("importcameras", "Import Cameras", True),
+         toggle("importenv", "Import Environment", True,
+                "Nomad's environment as a UsdLux DomeLight."),
          scale, light_scale],
         folder_type=hou.folderType.Simple,
     ))
@@ -278,7 +280,7 @@ def main():
     subnet, build = build_import(stage)
     make_asset(subnet, "build", "nomad_link_import", "Nomad Link Import", import_parm_group(),
                ("revision", "scale", "lightscale", "importmaterials", "importlights",
-                "importcameras"), 0, 1)
+                "importcameras", "importenv", "matstyle"), 0, 1)
 
     container.destroy()
     hou.hda.installFile(HDA_FILE)

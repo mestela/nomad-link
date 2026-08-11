@@ -83,7 +83,8 @@ def unique_child(parent_path, name, taken):
 
 
 def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_lights=True,
-                 import_cameras=True, light_scale=1.0, material_style="openpbr"):
+                 import_cameras=True, import_environment=True, light_scale=1.0,
+                 material_style="openpbr"):
     """Write everything the client has cached onto `stage`. Returns prim paths."""
     UsdGeom.Xform.Define(stage, ROOT)
     try:
@@ -123,6 +124,12 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
     if import_cameras:
         for link_id, camera in cache.cameras.items():
             entries[link_id] = ("camera", camera)
+
+    if import_environment:
+        dome = author_environment(stage, getattr(cache, "display", {}), cache.textures,
+                                  light_scale=light_scale)
+        if dome is not None:
+            written.append(dome.GetPath().pathString)
 
     children = {}
     for link_id, (_kind, entry) in entries.items():
@@ -361,6 +368,66 @@ def uv_transform(stage, path, name, channel, reader):
     node.CreateInput("rotation", Sdf.ValueTypeNames.Float).Set(math.degrees(rotation))
     node.CreateOutput("result", Sdf.ValueTypeNames.Float2)
     return node
+
+
+# ---------------------------------------------------------------- environment
+
+# Nomad's environment lives in display_config (PROTOCOL.md 10.1), whose keys come
+# from Nomad's settings files rather than the spec, so each of these is a list of
+# candidates. nomad_link.display() prints what a given Nomad actually sends.
+ENVIRONMENT_KEYS = {
+    "intensity": ("env_intensity", "env_factor", "env_power", "env_exposure"),
+    "rotation": ("env_rotation", "env_rotate", "env_orientation", "env_angle"),
+    "texture": ("env_texture_id", "env_texture", "env_image", "env_map"),
+    "name": ("env_name", "env_preset", "env_id"),
+    "visible": ("env_visible", "show_env", "show_background"),
+    "blur": ("background_blur",),
+}
+
+
+def environment_value(display, kind):
+    for key in ENVIRONMENT_KEYS[kind]:
+        if key in display:
+            return key, display[key]
+    return None, None
+
+
+def author_environment(stage, display, textures, light_scale=1.0):
+    """Nomad's environment as a UsdLux.DomeLight."""
+    if not display:
+        return None
+    if not any(key.startswith("env_") or key in ("background_blur",) for key in display):
+        return None
+
+    dome = UsdLux.DomeLight.Define(stage, ROOT + "/Environment")
+    prim = dome.GetPrim()
+
+    _key, intensity = environment_value(display, "intensity")
+    dome.CreateIntensityAttr(float(intensity if intensity is not None else 1.0) * light_scale)
+
+    _key, texture_id = environment_value(display, "texture")
+    blob = textures.get(texture_id) if texture_id else None
+    if blob is not None:
+        dome.CreateTextureFileAttr(blob["path"])
+    dome.CreateTextureFormatAttr(UsdLux.Tokens.latlong)
+
+    _key, rotation = environment_value(display, "rotation")
+    if rotation:
+        # Nomad rotates the environment about up (+Y); USD wants an xform op
+        UsdGeom.Xformable(prim).AddRotateYOp().Set(math.degrees(float(rotation))
+                                                   if abs(float(rotation)) <= 6.284 else float(rotation))
+
+    _key, visible = environment_value(display, "visible")
+    if visible is not None and not visible:
+        UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+
+    # keep the whole environment block: the key names are Nomad's, not the spec's,
+    # so anything unmapped is still inspectable on the prim
+    kept = {key: value for key, value in display.items()
+            if key.startswith("env_") or key in ("background_blur", "lights_enable")}
+    if kept:
+        prim.SetCustomDataByKey("nomad:environment", kept)
+    return dome
 
 
 # ---------------------------------------------------------------------- light

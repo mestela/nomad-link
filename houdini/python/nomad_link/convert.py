@@ -95,6 +95,42 @@ def corners_to_quads(sizes, *arrays):
     return stacked, mapping
 
 
+# --------------------------------------------------------------- sculpt layers
+
+# sparse per-vertex records: (vertex index, xyz offset)
+LAYER_DTYPE = numpy.dtype([("index", "<u4"), ("offset", "<f4", 3)])
+
+
+def decode_layers(header, binary):
+    """The `layers` array of mesh_full (PROTOCOL.md 7.1), records included."""
+    layers = []
+    for entry in header.get("layers", ()):
+        weight = float(entry.get("factor", 1.0)) * float(entry.get("factor_offset", 1.0))
+        layer = {
+            "name": str(entry.get("name", "layer")),
+            "weight": weight,
+            "visible": bool(entry.get("visible", True)) and bool(entry.get("visible_offset", True)),
+            "count": int(entry.get("count", 0)),
+        }
+        if "offset" in entry and layer["count"]:
+            records = numpy.frombuffer(binary, LAYER_DTYPE, layer["count"], int(entry["offset"]))
+            layer["indices"] = records["index"].astype(numpy.int64)
+            layer["offsets"] = numpy.array(records["offset"], numpy.float32)
+        layers.append(layer)
+    return layers
+
+
+def apply_layers(positions, layers):
+    """final position = base + sum of weight x offset, over visible layers."""
+    applied = 0
+    for layer in layers:
+        if not layer["visible"] or "indices" not in layer or layer["weight"] == 0.0:
+            continue
+        positions[layer["indices"]] += layer["offsets"] * layer["weight"]
+        applied += 1
+    return applied
+
+
 # ------------------------------------------------------------------- decoding
 
 def decode_mesh(header, binary):
@@ -145,6 +181,15 @@ def decode_mesh(header, binary):
             continue
         dtype = "u2" if scale > 255.0 else "u1"
         mesh[houdini_name] = _read(binary, offset, count, dtype).astype(numpy.float32) / scale
+
+    # positions in mesh_full are the BASE: sculpt layers carry sparse deltas that
+    # the client applies, which is why a posed character arrives unposed without
+    # this. Paint is the other way round -- the plain channels are already
+    # composited, and base_* holds the un-composited version.
+    mesh["layers"] = decode_layers(header, binary)
+    if mesh["layers"]:
+        mesh["base_positions"] = mesh["positions"].copy()
+        mesh["layers_applied"] = apply_layers(mesh["positions"], mesh["layers"])
 
     if "face_group_offset" in header:
         mesh["face_group"] = _read(binary, header["face_group_offset"], faces, "<u2").astype(numpy.int32)

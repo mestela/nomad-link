@@ -143,10 +143,18 @@ def report(lines=40, meshes=12):
             break
         if index >= meshes:
             break
-        print("  mesh     %-24s %6d pts  %-7s  %s" % (
+        layers = mesh.get("layers") or []
+        note = ""
+        if layers:
+            note = "  [%d layers, %d applied: %s]" % (
+                len(layers), mesh.get("layers_applied", 0),
+                ", ".join("%s x%.2f%s" % (layer["name"], layer["weight"],
+                                          "" if layer["visible"] else " off")
+                          for layer in layers[:4]))
+        print("  mesh     %-24s %6d pts  %-7s  %s%s" % (
             mesh["name"][:24], len(mesh["positions"]),
             "visible" if mesh.get("visible", True) else "HIDDEN",
-            " ".join(key for key in channels if key in mesh) or "positions only"))
+            " ".join(key for key in channels if key in mesh) or "positions only", note))
     for name, store in (("lights", link.lights), ("cameras", link.cameras)):
         for link_id, entry in store.items():
             print("  %-8s %-24s %s" % (name[:-1], entry.get("name", "?"), link_id))

@@ -229,6 +229,10 @@ class DisplayCache(Cache):
 env_cache = DisplayCache({"env_intensity": 2.5, "env_rotation": 1.5708,
                           "env_texture_id": "envtex", "background_blur": 0.4,
                           "shader_type": 1, "pp_bloom_enable": True})
+# the keys a real Nomad 2.9 sends, from a live session
+REAL_ENV = {"env_attached_to_camera": True, "env_enable": True,
+            "env_exposure": 0.3850775361061096, "env_rotation": 0,
+            "env_name": "museum_of_ethnography_1k.hdr"}
 env_cache.textures["envtex"] = {"name": "studio.hdr", "path": "/tmp/nomad_tex/studio.hdr"}
 env_stage = Usd.Stage.CreateInMemory()
 usd.author_scene(env_stage, env_cache, material_style="preview")
@@ -249,5 +253,34 @@ no_env = Usd.Stage.CreateInMemory()
 usd.author_scene(no_env, DisplayCache({"shader_type": 1}), material_style="preview")
 check(not no_env.GetPrimAtPath("/nomad/Environment"),
       "no DomeLight when Nomad sent no environment settings")
+
+# the real key set: exposure is stops, and the HDRI is named rather than sent
+real_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(real_stage, DisplayCache(dict(REAL_ENV)), material_style="preview")
+real = UsdLux.DomeLight(real_stage.GetPrimAtPath("/nomad/Environment"))
+check(bool(real), "a real Nomad environment becomes a DomeLight")
+check(abs(real.GetExposureAttr().Get() - 0.3850775361061096) < 1e-6,
+      "env_exposure drives exposure, not intensity")
+check(abs(real.GetIntensityAttr().Get() - 1.0) < 1e-6, "intensity stays at 1 with no env_intensity")
+check(not real.GetTextureFileAttr().Get(), "no texture without a search path: Nomad only names it")
+check(real.GetPrim().GetCustomDataByKey("nomad:environment")["env_name"]
+      == "museum_of_ethnography_1k.hdr", "the HDRI name is kept so it can be found later")
+
+# with a search path, the named HDRI resolves to a real file
+import tempfile  # noqa: E402
+folder = tempfile.mkdtemp()
+open(os.path.join(folder, "museum_of_ethnography_1k.hdr"), "w").write("x")
+found_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(found_stage, DisplayCache(dict(REAL_ENV)), material_style="preview",
+                 environment_path=folder)
+found = UsdLux.DomeLight(found_stage.GetPrimAtPath("/nomad/Environment"))
+check(found.GetTextureFileAttr().Get().path.endswith("museum_of_ethnography_1k.hdr"),
+      "the named HDRI is picked up from the search path")
+
+disabled = DisplayCache(dict(REAL_ENV, env_enable=False))
+off_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(off_stage, disabled, material_style="preview")
+check(UsdGeom.Imageable(off_stage.GetPrimAtPath("/nomad/Environment")).GetVisibilityAttr().Get()
+      == "invisible", "env_enable False hides the dome")
 
 print("\nenvironment ok")

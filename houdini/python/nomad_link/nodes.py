@@ -276,6 +276,7 @@ def cook_import(lop):
         import_lights=bool(_eval(lop, "importlights", 1)),
         import_cameras=bool(_eval(lop, "importcameras", 1)),
         import_environment=bool(_eval(lop, "importenv", 1)),
+        environment_path=hou.text.expandString(_eval(lop, "envpath", "") or ""),
         light_scale=_eval(lop, "lightscale", 1.0),
         material_style=_eval(lop, "matstyle", "openpbr") or "openpbr",
     )

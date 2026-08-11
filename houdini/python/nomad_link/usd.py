@@ -15,6 +15,7 @@ Note there is no winding flip here, unlike the SOP path: USD's default
 Nothing here touches hou -- it takes a stage and the client's cache.
 """
 import math
+import os
 
 import numpy
 from pxr import Gf, Sdf, Tf, UsdGeom, UsdLux, UsdShade, Vt
@@ -84,7 +85,7 @@ def unique_child(parent_path, name, taken):
 
 def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_lights=True,
                  import_cameras=True, import_environment=True, light_scale=1.0,
-                 material_style="openpbr"):
+                 material_style="openpbr", environment_path=""):
     """Write everything the client has cached onto `stage`. Returns prim paths."""
     UsdGeom.Xform.Define(stage, ROOT)
     try:
@@ -127,7 +128,7 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
 
     if import_environment:
         dome = author_environment(stage, getattr(cache, "display", {}), cache.textures,
-                                  light_scale=light_scale)
+                                  light_scale=light_scale, search_path=environment_path)
         if dome is not None:
             written.append(dome.GetPath().pathString)
 
@@ -376,11 +377,12 @@ def uv_transform(stage, path, name, channel, reader):
 # from Nomad's settings files rather than the spec, so each of these is a list of
 # candidates. nomad_link.display() prints what a given Nomad actually sends.
 ENVIRONMENT_KEYS = {
-    "intensity": ("env_intensity", "env_factor", "env_power", "env_exposure"),
+    "intensity": ("env_intensity", "env_factor", "env_power"),
+    "exposure": ("env_exposure",),          # stops, not a multiplier
     "rotation": ("env_rotation", "env_rotate", "env_orientation", "env_angle"),
     "texture": ("env_texture_id", "env_texture", "env_image", "env_map"),
     "name": ("env_name", "env_preset", "env_id"),
-    "visible": ("env_visible", "show_env", "show_background"),
+    "enable": ("env_enable", "env_visible", "show_env"),
     "blur": ("background_blur",),
 }
 
@@ -392,7 +394,18 @@ def environment_value(display, kind):
     return None, None
 
 
-def author_environment(stage, display, textures, light_scale=1.0):
+def find_hdri(name, search_path):
+    """Nomad names a built-in HDRI rather than sending pixels; look for the file."""
+    if not name or not search_path:
+        return ""
+    for folder in str(search_path).split(os.pathsep):
+        candidate = os.path.join(os.path.expanduser(folder.strip()), os.path.basename(name))
+        if folder.strip() and os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def author_environment(stage, display, textures, light_scale=1.0, search_path=""):
     """Nomad's environment as a UsdLux.DomeLight."""
     if not display:
         return None
@@ -404,11 +417,19 @@ def author_environment(stage, display, textures, light_scale=1.0):
 
     _key, intensity = environment_value(display, "intensity")
     dome.CreateIntensityAttr(float(intensity if intensity is not None else 1.0) * light_scale)
+    _key, exposure = environment_value(display, "exposure")
+    if exposure is not None:
+        dome.CreateExposureAttr(float(exposure))  # stops: USD has its own exposure input
 
     _key, texture_id = environment_value(display, "texture")
     blob = textures.get(texture_id) if texture_id else None
+    _key, name = environment_value(display, "name")
     if blob is not None:
         dome.CreateTextureFileAttr(blob["path"])
+    else:
+        found = find_hdri(name, search_path)
+        if found:
+            dome.CreateTextureFileAttr(found)
     dome.CreateTextureFormatAttr(UsdLux.Tokens.latlong)
 
     _key, rotation = environment_value(display, "rotation")
@@ -417,8 +438,8 @@ def author_environment(stage, display, textures, light_scale=1.0):
         UsdGeom.Xformable(prim).AddRotateYOp().Set(math.degrees(float(rotation))
                                                    if abs(float(rotation)) <= 6.284 else float(rotation))
 
-    _key, visible = environment_value(display, "visible")
-    if visible is not None and not visible:
+    _key, enabled = environment_value(display, "enable")
+    if enabled is not None and not enabled:
         UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
 
     # keep the whole environment block: the key names are Nomad's, not the spec's,

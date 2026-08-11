@@ -135,6 +135,13 @@ def import_parm_group():
                                         default_value=(1.0,), min=0.0, max=100.0)
     light_scale.setHelp("Nomad's light strengths are not in Karma's units; tune here.")
 
+    env_path = hou.StringParmTemplate("envpath", "Environment Search Path", 1,
+                                      default_value=("",),
+                                      string_type=hou.stringParmType.FileReference)
+    env_path.setHelp("Nomad names its HDRI (env_name) but does not send the pixels. "
+                     "Point this at a folder holding that file and the DomeLight gets "
+                     "its texture; several folders can be separated by a colon.")
+
     style = hou.StringParmTemplate(
         "matstyle", "Material Style", 1, default_value=("openpbr",),
         menu_items=("openpbr", "preview"),
@@ -159,6 +166,7 @@ def import_parm_group():
          toggle("importcameras", "Import Cameras", True),
          toggle("importenv", "Import Environment", True,
                 "Nomad's environment as a UsdLux DomeLight."),
+         env_path,
          scale, light_scale],
         folder_type=hou.folderType.Simple,
     ))
@@ -280,7 +288,7 @@ def main():
     subnet, build = build_import(stage)
     make_asset(subnet, "build", "nomad_link_import", "Nomad Link Import", import_parm_group(),
                ("revision", "scale", "lightscale", "importmaterials", "importlights",
-                "importcameras", "importenv", "matstyle"), 0, 1)
+                "importcameras", "importenv", "matstyle", "envpath"), 0, 1)
 
     container.destroy()
     hou.hda.installFile(HDA_FILE)

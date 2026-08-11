@@ -19,7 +19,7 @@ import math
 import numpy
 from pxr import Gf, Sdf, Tf, UsdGeom, UsdLux, UsdShade, Vt
 
-from . import convert
+from . import convert, openpbr
 
 IDENTITY = convert.IDENTITY
 ROOT = "/nomad"
@@ -83,7 +83,7 @@ def unique_child(parent_path, name, taken):
 
 
 def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_lights=True,
-                 import_cameras=True, light_scale=1.0):
+                 import_cameras=True, light_scale=1.0, material_style="openpbr"):
     """Write everything the client has cached onto `stage`. Returns prim paths."""
     UsdGeom.Xform.Define(stage, ROOT)
     try:
@@ -108,7 +108,8 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
             block = cache.materials.get(mesh_id, {})
             name = mesh["name"] if mesh else mesh_id
             path = unique_child(MATERIALS, name, material_names)
-            materials[mesh_id] = author_material(stage, path, block, cache.textures, mesh)
+            builder = openpbr.author if material_style == "openpbr" else author_material
+            materials[mesh_id] = builder(stage, path, block, cache.textures, mesh)
             written.append(path)
 
     # objects nest under their parent when Nomad names one, else under /nomad

@@ -135,6 +135,14 @@ def import_parm_group():
                                         default_value=(1.0,), min=0.0, max=100.0)
     light_scale.setHelp("Nomad's light strengths are not in Karma's units; tune here.")
 
+    style = hou.StringParmTemplate(
+        "matstyle", "Material Style", 1, default_value=("openpbr",),
+        menu_items=("openpbr", "preview"),
+        menu_labels=("MaterialX OpenPBR", "UsdPreviewSurface"),
+    )
+    style.setHelp("OpenPBR covers subsurface, refraction and paint compositing that "
+                  "UsdPreviewSurface cannot express. Preview surface is more portable.")
+
     group.append(hou.FolderParmTemplate(
         "import", "Import",
         [button("getsel", "Get Selection", "get_selection",
@@ -145,7 +153,8 @@ def import_parm_group():
                 "Nomad ships with sync_lights and sync_materials off, so those "
                 "edits only arrive on an explicit Get Scene until this is set."),
          toggle("importmaterials", "Import Materials", True,
-                "Nomad's material block as UsdPreviewSurface, with its textures."),
+                "Nomad's material block, with its textures."),
+         style,
          toggle("importlights", "Import Lights", True),
          toggle("importcameras", "Import Cameras", True),
          scale, light_scale],

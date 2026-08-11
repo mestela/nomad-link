@@ -202,8 +202,14 @@ check(len(UsdGeom.Subset.GetAllGeomSubsets(usd_mesh)) == 2, "face groups became 
 
 bound = UsdShade.MaterialBindingAPI(usd_mesh.GetPrim()).GetDirectBinding().GetMaterial()
 check(bool(bound), "a material is bound to the mesh")
-preview = UsdShade.Shader(usd_stage.GetPrimAtPath(bound.GetPath().pathString + "/Preview"))
-check(abs(preview.GetInput("roughness").Get() - 0.35) < 1e-6, "material values reached USD")
+# the LOP defaults to MaterialX OpenPBR, which is what Karma wants
+surface = UsdShade.Shader(usd_stage.GetPrimAtPath(bound.GetPath().pathString + "/OpenPBR"))
+check(surface.GetIdAttr().Get() == "ND_open_pbr_surface_surfaceshader",
+      "the material is an OpenPBR surface")
+check(abs(surface.GetInput("specular_roughness").Get() - 0.35) < 1e-6,
+      "material values reached USD")
+check(bool(bound.GetSurfaceOutput("mtlx").GetConnectedSource()),
+      "bound on the mtlx render context")
 check(bool(UsdLux.SphereLight(usd_stage.GetPrimAtPath("/nomad/Key"))), "the spot light is a prim")
 check(bool(UsdGeom.Camera(usd_stage.GetPrimAtPath("/nomad/Shot"))), "the camera is a prim")
 

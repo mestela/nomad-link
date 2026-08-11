@@ -17,6 +17,7 @@ MODULES = ["test_convert.py", "test_link.py", "test_nodes.py"]
 try:
     import pxr  # noqa: F401
     MODULES.append("test_usd.py")
+    MODULES.append("test_openpbr.py")
 except ImportError:
     print("no pxr: skipping test_usd.py\n")
 

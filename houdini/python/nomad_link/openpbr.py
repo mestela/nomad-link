@@ -1,0 +1,215 @@
+# SPDX-License-Identifier: MIT
+"""Nomad materials as MaterialX OpenPBR, for Karma.
+
+UsdPreviewSurface has nowhere to put most of Nomad's material block --
+subsurface, refraction, absorption, reflectance -- and no multiply node, so it
+cannot express "material colour times vertex paint times texture" and has to
+pick one source per channel. OpenPBR covers the parameters, and MaterialX's
+`multiply` and `geompropvalue` nodes cover the compositing.
+
+Verified against MaterialX 1.39.5 as shipped with Houdini 22.
+
+Approximate mappings, flagged because they are judgement calls rather than
+translations -- see MAPPING_NOTES:
+
+    reflectance      -> specular_weight     (Nomad's 0.5 = 4% F0 = weight 1.0)
+    absorption       -> transmission_depth  (Beer-Lambert distance, inverted)
+    interior roughness                      (no OpenPBR equivalent; kept as data)
+"""
+from pxr import Gf, Sdf, UsdShade
+
+SURFACE = "ND_open_pbr_surface_surfaceshader"
+MULTIPLY_COLOR = "ND_multiply_color3"
+GEOMPROP_COLOR = "ND_geompropvalue_color3"
+GEOMPROP_FLOAT = "ND_geompropvalue_float"
+IMAGE_COLOR = "ND_image_color3"
+IMAGE_FLOAT = "ND_image_float"
+GEOMPROP_UV = "ND_geompropvalue_vector2"
+
+MAPPING_NOTES = {
+    "reflectance": "specular_weight = reflectance * 2, so Nomad's 0.5 default becomes 1.0",
+    "absorption": "transmission_depth = 1 / absorption_factor; Nomad's absorption is a "
+                  "density, OpenPBR's is a distance",
+    "refraction_interior_roughness": "no OpenPBR input; kept in customData",
+    "material_type": "additive, dithering and shadow_catcher have no OpenPBR equivalent",
+}
+
+# scalar Nomad value -> OpenPBR input. Vertex paint or a texture replaces these
+# (PROTOCOL.md section 10), colour is the only channel that multiplies.
+SCALARS = (
+    ("roughness", "specular_roughness"),
+    ("metalness", "base_metalness"),
+    ("opacity", "geometry_opacity"),
+    ("refraction_ior", "specular_ior"),
+)
+# nomad paint channel -> (mesh key, primvar, OpenPBR input)
+PAINT = {
+    "roughness": ("rough", "rough", "specular_roughness"),
+    "metalness": ("metallic", "metallic", "base_metalness"),
+    "opacity": ("alpha", "displayOpacity", "geometry_opacity"),
+}
+TEXTURE_INPUTS = {
+    "roughness": "specular_roughness",
+    "metalness": "base_metalness",
+    "opacity": "geometry_opacity",
+    "emissive": "emission_color",
+}
+
+
+def author(stage, path, block, textures, mesh=None):
+    """Author an OpenPBR material at `path`. Returns the UsdShade.Material."""
+    material = UsdShade.Material.Define(stage, path)
+    shader = UsdShade.Shader.Define(stage, path + "/OpenPBR")
+    shader.CreateIdAttr(SURFACE)
+    # Karma reads the mtlx render context
+    material.CreateSurfaceOutput("mtlx").ConnectToSource(shader.ConnectableAPI(), "out")
+
+    channels = block.get("textures") or {}
+    available = {name: textures[channel["texture_id"]]
+                 for name, channel in channels.items()
+                 if textures.get(channel.get("texture_id"))}
+
+    _base_color(stage, path, shader, block, mesh, available)
+    _scalars(stage, path, shader, block, mesh, available)
+    _transmission(shader, block)
+    _subsurface(shader, block)
+    _emission(shader, block)
+
+    kept = {key: value for key, value in block.items()
+            if key in ("material_type", "refraction_interior_roughness", "shadow_color",
+                       "always_unlit", "flip_culling")}
+    if kept:
+        material.GetPrim().SetCustomDataByKey("nomad:material", kept)
+    return material
+
+
+def _shader(stage, path, name, node_id):
+    node = UsdShade.Shader.Define(stage, "%s/%s" % (path, name))
+    node.CreateIdAttr(node_id)
+    return node
+
+
+def _uv_reader(stage, path, cache):
+    """One st reader shared by every texture on this material."""
+    if "uv" not in cache:
+        node = _shader(stage, path, "st", GEOMPROP_UV)
+        node.CreateInput("geomprop", Sdf.ValueTypeNames.String).Set("st")
+        node.CreateOutput("out", Sdf.ValueTypeNames.Float2)
+        cache["uv"] = node
+    return cache["uv"]
+
+
+def _texture(stage, path, name, blob, colour, cache):
+    node = _shader(stage, path, name + "_texture", IMAGE_COLOR if colour else IMAGE_FLOAT)
+    node.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(blob["path"])
+    node.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        _uv_reader(stage, path, cache).ConnectableAPI(), "out")
+    node.CreateOutput("out", Sdf.ValueTypeNames.Color3f if colour
+                      else Sdf.ValueTypeNames.Float)
+    return node
+
+
+def _base_color(stage, path, shader, block, mesh, available):
+    """colour = material tint x vertex paint x texture, the way Nomad composites."""
+    cache = {}
+    sources = []
+    tint = block.get("color")
+    painted = mesh is not None and "color" in mesh
+    textured = "color" in available
+
+    if tint is not None and (list(tint[:3]) != [1.0, 1.0, 1.0] or not (painted or textured)):
+        constant = _shader(stage, path, "base_tint", "ND_constant_color3")
+        constant.CreateInput("value", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*tint[:3]))
+        constant.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+        sources.append(constant)
+    if painted:
+        paint = _shader(stage, path, "paint", GEOMPROP_COLOR)
+        paint.CreateInput("geomprop", Sdf.ValueTypeNames.String).Set("displayColor")
+        paint.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+        sources.append(paint)
+    if textured:
+        sources.append(_texture(stage, path, "color", available["color"], True, cache))
+
+    if not sources:
+        return
+    result = sources[0]
+    for index, node in enumerate(sources[1:]):
+        combine = _shader(stage, path, "base_mix%d" % index, MULTIPLY_COLOR)
+        combine.CreateInput("in1", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+            result.ConnectableAPI(), "out")
+        combine.CreateInput("in2", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+            node.ConnectableAPI(), "out")
+        combine.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+        result = combine
+    shader.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+        result.ConnectableAPI(), "out")
+    shader.GetPrim().GetStage()  # keep the cache alive until the material is written
+
+
+def _scalars(stage, path, shader, block, mesh, available):
+    """Texture beats paint beats the material value, per the protocol."""
+    cache = {}
+    for nomad_key, target in SCALARS:
+        paint = PAINT.get(nomad_key)
+        if nomad_key in available:
+            node = _texture(stage, path, nomad_key, available[nomad_key], False, cache)
+            shader.CreateInput(target, Sdf.ValueTypeNames.Float).ConnectToSource(
+                node.ConnectableAPI(), "out")
+        elif paint and mesh is not None and paint[0] in mesh:
+            node = _shader(stage, path, nomad_key + "_paint", GEOMPROP_FLOAT)
+            node.CreateInput("geomprop", Sdf.ValueTypeNames.String).Set(paint[1])
+            node.CreateOutput("out", Sdf.ValueTypeNames.Float)
+            shader.CreateInput(target, Sdf.ValueTypeNames.Float).ConnectToSource(
+                node.ConnectableAPI(), "out")
+        elif nomad_key in block:
+            shader.CreateInput(target, Sdf.ValueTypeNames.Float).Set(float(block[nomad_key]))
+
+    if "reflectance" in block:
+        # Nomad's 0.5 is the 4% F0 default, which is specular_weight 1.0
+        weight = max(0.0, min(2.0, float(block["reflectance"]) * 2.0))
+        shader.CreateInput("specular_weight", Sdf.ValueTypeNames.Float).Set(weight)
+
+
+def _transmission(shader, block):
+    if block.get("material_type") != "refraction":
+        return
+    shader.CreateInput("transmission_weight", Sdf.ValueTypeNames.Float).Set(1.0)
+    if "refraction_surface_roughness" in block:
+        shader.CreateInput("specular_roughness", Sdf.ValueTypeNames.Float).Set(
+            float(block["refraction_surface_roughness"]))
+    if block.get("absorption_enable"):
+        colour = block.get("absorption_color", [1.0, 1.0, 1.0])
+        shader.CreateInput("transmission_color", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(*colour[:3]))
+        factor = float(block.get("absorption_factor", 1.0))
+        # Nomad gives a density, OpenPBR wants the distance light travels
+        shader.CreateInput("transmission_depth", Sdf.ValueTypeNames.Float).Set(
+            1.0 / factor if factor > 1e-6 else 0.0)
+
+
+def _subsurface(shader, block):
+    subsurface = block.get("material_type") == "subsurface"
+    translucent = bool(block.get("translucency"))
+    if not (subsurface or translucent):
+        return
+    weight = float(block.get("translucency_factor", 1.0)) if translucent else 1.0
+    shader.CreateInput("subsurface_weight", Sdf.ValueTypeNames.Float).Set(
+        max(0.0, min(1.0, weight)))
+    colour = block.get("subsurface_color")
+    if colour is not None:
+        shader.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(*colour[:3]))
+    depth = float(block.get("subsurface_depth", -1.0))
+    if depth > 0.0:  # negative means auto in Nomad, which is OpenPBR's default
+        shader.CreateInput("subsurface_radius", Sdf.ValueTypeNames.Float).Set(depth)
+
+
+def _emission(shader, block):
+    channel = (block.get("textures") or {}).get("emissive") or {}
+    strength = float(channel.get("strength", 0.0))
+    if strength > 0.0:
+        shader.CreateInput("emission_luminance", Sdf.ValueTypeNames.Float).Set(strength)
+        factor = channel.get("factor")
+        if isinstance(factor, (list, tuple)):
+            shader.CreateInput("emission_color", Sdf.ValueTypeNames.Color3f).Set(
+                Gf.Vec3f(*[float(f) for f in factor[:3]]))

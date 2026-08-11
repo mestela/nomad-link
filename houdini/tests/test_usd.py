@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Author a Nomad scene onto a USD stage and read it back:
+"""Author a Nomad scene onto a USD stage and read it back (UsdPreviewSurface path):
 
     hython tests/test_usd.py
 
@@ -16,6 +16,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "python"))
 
+from fixtures import Cache, quad_and_tri  # noqa: E402
+
 from nomad_link import convert, usd  # noqa: E402
 
 
@@ -23,39 +25,6 @@ def check(condition, message):
     if not condition:
         raise AssertionError(message)
     print("ok  " + message)
-
-
-class Cache:
-    """Stands in for the client: just the fields author_scene reads."""
-
-    def __init__(self):
-        self.meshes = {}
-        self.order = []
-        self.materials = {}
-        self.lights = {}
-        self.cameras = {}
-        self.textures = {}
-
-    def add_mesh(self, mesh):
-        self.meshes[mesh["mesh_id"]] = mesh
-        self.order.append(mesh["mesh_id"])
-
-
-def quad_and_tri(mesh_id="m1", name="Sculpt", translate_y=10.0):
-    points = numpy.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0]], "f4")
-    texcoords = numpy.array([[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1]], "f4")
-    world = list(convert.IDENTITY)
-    world[13] = translate_y
-    header, binary = convert.encode_mesh(
-        mesh_id=mesh_id, geometry_id="g1", name=name,
-        positions=points, sizes=numpy.array([4, 3], "i4"),
-        corners=numpy.array([0, 1, 2, 3, 1, 4, 2], "i4"), texcoords=texcoords,
-        point_attribs={"color": numpy.tile([0.2, 0.4, 0.6], (5, 1)),
-                       "mask": numpy.linspace(0, 1, 5)},
-        face_group=numpy.array([0, 1], "i4"), face_group_names=("Head", "Body"),
-        world_matrix=world, ngon=True,
-    )
-    return convert.decode_mesh(header, binary)
 
 
 cache = Cache()
@@ -86,7 +55,7 @@ cache.cameras["c1"] = {"link_id": "c1", "name": "Shot", "fov_y": 35.0,
                        "pivot": [0.0, 1.0, 0.0], "world_matrix": camera_matrix}
 
 stage = Usd.Stage.CreateInMemory()
-paths = usd.author_scene(stage, cache)
+paths = usd.author_scene(stage, cache, material_style="preview")
 print("authored:", ", ".join(paths))
 
 # ---- mesh
@@ -182,7 +151,7 @@ check(camera.GetPrim().GetCustomDataByKey("nomad:pivot")[1] == 1.0, "the orbit p
 
 # ---- scale parameter
 scaled = Usd.Stage.CreateInMemory()
-usd.author_scene(scaled, cache, scale=2.0)
+usd.author_scene(scaled, cache, scale=2.0, material_style="preview")
 scaled_mesh = UsdGeom.Mesh(scaled.GetPrimAtPath("/nomad/Sculpt"))
 check(abs(scaled_mesh.GetPointsAttr().Get()[4][0] - 4.0) < 1e-6, "scale applies to points")
 translation = UsdGeom.Xformable(scaled_mesh).GetLocalTransformation().ExtractTranslation()
@@ -193,7 +162,7 @@ paint_cache = Cache()
 paint_cache.add_mesh(quad_and_tri(mesh_id="m2", name="Painted"))
 paint_cache.materials["m2"] = {"color": [1.0, 1.0, 1.0], "roughness": 0.5, "metalness": 0.0}
 painted_stage = Usd.Stage.CreateInMemory()
-usd.author_scene(painted_stage, paint_cache)
+usd.author_scene(painted_stage, paint_cache, material_style="preview")
 painted = UsdShade.Shader(painted_stage.GetPrimAtPath("/nomad/Materials/Painted/Preview"))
 check(painted.GetInput("diffuseColor").HasConnectedSource(),
       "a painted mesh drives diffuseColor from a primvar, not a flat colour")
@@ -208,7 +177,7 @@ check(not painted.GetInput("roughness").HasConnectedSource()
 bare = Cache()
 bare.add_mesh(quad_and_tri(mesh_id="m3", name="Bare"))
 bare_stage = Usd.Stage.CreateInMemory()
-usd.author_scene(bare_stage, bare)
+usd.author_scene(bare_stage, bare, material_style="preview")
 bare_mesh = UsdGeom.Mesh(bare_stage.GetPrimAtPath("/nomad/Bare"))
 bound_bare = UsdShade.MaterialBindingAPI(bare_mesh.GetPrim()).GetDirectBinding().GetMaterial()
 check(bool(bound_bare), "a painted mesh gets a material even with no material message")

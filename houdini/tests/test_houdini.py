@@ -213,6 +213,26 @@ check(bool(bound.GetSurfaceOutput("mtlx").GetConnectedSource()),
 check(bool(UsdLux.SphereLight(usd_stage.GetPrimAtPath("/nomad/Key"))), "the spot light is a prim")
 check(bool(UsdGeom.Camera(usd_stage.GetPrimAtPath("/nomad/Shot"))), "the camera is a prim")
 
+# an instance must share the original's material, not lose it
+instance_matrix = list(convert.IDENTITY)
+instance_matrix[12] = 5.0
+nomad.send({"type": "mesh_instance", "mesh_id": "m1-copy", "geometry_id": "g1",
+            "name": "Sculpt Copy", "visible": True, "world_matrix": instance_matrix,
+            "live_sync": False})
+check(wait(link, lambda: "m1-copy" in link.meshes), "the instance arrives")
+copied = lop.stage()
+copy_prim = copied.GetPrimAtPath("/nomad/Sculpt_Copy")
+check(bool(copy_prim), "the instance is on the stage: %s"
+      % [p.GetPath().pathString for p in copied.Traverse() if "Copy" in p.GetName()])
+copy_material = UsdShade.MaterialBindingAPI(copy_prim).GetDirectBinding().GetMaterial()
+check(bool(copy_material), "the instance has a material bound")
+check(copy_material.GetPath() == bound.GetPath(),
+      "and it is the original's material, not a bare one: %s vs %s"
+      % (copy_material.GetPath(), bound.GetPath()))
+materials_scope = copied.GetPrimAtPath("/nomad/Materials")
+check(len(list(materials_scope.GetChildren())) == 1,
+      "one material is authored for both, not one per instance")
+
 # a texture: blob -> disk -> the material's image node (PROTOCOL.md 10.2)
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0"

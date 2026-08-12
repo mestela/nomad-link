@@ -96,22 +96,38 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
     taken = set()
 
     materials = {}
+    keys = {}
     if import_materials:
         # a painted mesh needs a material even when Nomad sent no material block,
         # otherwise its vertex paint has nothing to render through
         painted = {mesh_id for mesh_id, mesh in cache.meshes.items()
                    if any(spec[0] in mesh for spec in PAINT_CHANNELS.values())}
-        wanted = [mesh_id for mesh_id in cache.order if mesh_id in cache.materials or mesh_id in painted]
+        # an instance carries no material of its own: it shares the original's,
+        # both to get the right look and to author one material instead of hundreds
+        for mesh_id in cache.order:
+            mesh = cache.meshes.get(mesh_id)
+            if mesh is None:
+                continue
+            source = mesh.get("material_source")
+            if mesh_id not in cache.materials and source in cache.materials:
+                keys[mesh_id] = source
+            elif mesh_id in cache.materials or mesh_id in painted:
+                keys[mesh_id] = mesh_id
+
+        wanted = []
+        for key in keys.values():
+            if key not in wanted:
+                wanted.append(key)
         if wanted:
             UsdGeom.Scope.Define(stage, MATERIALS)
         material_names = set()
-        for mesh_id in wanted:
-            mesh = cache.meshes.get(mesh_id)
-            block = cache.materials.get(mesh_id, {})
-            name = mesh["name"] if mesh else mesh_id
+        for key in wanted:
+            mesh = cache.meshes.get(key)
+            block = cache.materials.get(key, {})
+            name = mesh["name"] if mesh else key
             path = unique_child(MATERIALS, name, material_names)
             builder = openpbr.author if material_style == "openpbr" else author_material
-            materials[mesh_id] = builder(stage, path, block, cache.textures, mesh)
+            materials[key] = builder(stage, path, block, cache.textures, mesh)
             written.append(path)
 
     # objects nest under their parent when Nomad names one, else under /nomad
@@ -152,7 +168,7 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
                     world, parent_entry.get("world_matrix", IDENTITY))
             if kind == "mesh":
                 prim = author_mesh(stage, path, entry, scale=scale, matrix_values=local)
-                material = materials.get(link_id)
+                material = materials.get(keys.get(link_id, link_id))
                 if material is not None:
                     UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
                     UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)

@@ -409,6 +409,9 @@ class Client:
             return
         mesh = dict(source)
         mesh["mesh_id"] = header.get("mesh_id", "")
+        # materials are keyed by mesh_id and Nomad sends one for the original, so
+        # remember where this instance's geometry came from
+        mesh["material_source"] = source.get("material_source") or source["mesh_id"]
         mesh["name"] = header.get("name", source["name"])
         mesh["visible"] = bool(header.get("visible", True))
         mesh["world_matrix"] = list(header.get("world_matrix", convert.IDENTITY))

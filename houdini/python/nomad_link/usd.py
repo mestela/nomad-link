@@ -102,16 +102,28 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
         # otherwise its vertex paint has nothing to render through
         painted = {mesh_id for mesh_id, mesh in cache.meshes.items()
                    if any(spec[0] in mesh for spec in PAINT_CHANNELS.values())}
-        # an instance carries no material of its own: it shares the original's,
-        # both to get the right look and to author one material instead of hundreds
+        # A copy carries no material of its own. mesh_instance says which mesh it
+        # came from; anything else that reuses a geometry_id (array repeaters, and
+        # whatever else Nomad copies with) is matched on that instead.
+        by_geometry = {}
+        for mesh_id in cache.order:
+            mesh = cache.meshes.get(mesh_id)
+            if mesh is not None and mesh_id in cache.materials:
+                by_geometry.setdefault(mesh.get("geometry_id") or mesh_id, mesh_id)
+
         for mesh_id in cache.order:
             mesh = cache.meshes.get(mesh_id)
             if mesh is None:
                 continue
+            if mesh_id in cache.materials:
+                keys[mesh_id] = mesh_id
+                continue
             source = mesh.get("material_source")
-            if mesh_id not in cache.materials and source in cache.materials:
+            if source not in cache.materials:
+                source = by_geometry.get(mesh.get("geometry_id"))
+            if source in cache.materials:
                 keys[mesh_id] = source
-            elif mesh_id in cache.materials or mesh_id in painted:
+            elif mesh_id in painted:
                 keys[mesh_id] = mesh_id
 
         wanted = []

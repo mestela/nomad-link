@@ -219,6 +219,23 @@ check(bool(orphan_stage.GetPrimAtPath("/nomad/Orphan")),
 check(stage.ExportToString() is not None, "the stage serialises")
 print("\nall good")
 
+# ---- copies that are not mesh_instance still find the material by geometry_id
+repeated = Cache()
+original = quad_and_tri(mesh_id="r1", name="Bolt")
+copy = quad_and_tri(mesh_id="r2", name="Bolt Copy")   # same geometry_id, its own mesh_id
+repeated.add_mesh(original)
+repeated.add_mesh(copy)
+repeated.materials["r1"] = {"color": [0.1, 0.2, 0.9], "roughness": 0.2}
+repeat_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(repeat_stage, repeated, material_style="preview")
+first = UsdShade.MaterialBindingAPI(
+    repeat_stage.GetPrimAtPath("/nomad/Bolt")).GetDirectBinding().GetMaterial()
+second = UsdShade.MaterialBindingAPI(
+    repeat_stage.GetPrimAtPath("/nomad/Bolt_Copy")).GetDirectBinding().GetMaterial()
+check(bool(second), "a copy sharing a geometry_id gets a material")
+check(first.GetPath() == second.GetPath(),
+      "and it is the original's: %s vs %s" % (first.GetPath(), second.GetPath()))
+
 # ---- environment: Nomad's display_config as a DomeLight
 class DisplayCache(Cache):
     def __init__(self, display):

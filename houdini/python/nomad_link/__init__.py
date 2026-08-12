@@ -37,7 +37,7 @@ __all__ = [
     "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
-    "watch", "report", "material", "display",
+    "watch", "report", "material", "display", "bindings",
 ]
 
 
@@ -105,6 +105,32 @@ def display(kind="env"):
         return
     for key in keys:
         print("  %-28s %r" % (key, settings[key]))
+
+
+def bindings():
+    """Show which material block each mesh resolved to, and why.
+
+    Link keys materials by mesh_id with no sharing, so a copy has to borrow the
+    original's. This prints what that resolution decided.
+    """
+    from . import usd
+    link = client()
+    keys = usd.material_keys(link)
+    for mesh_id in link.order:
+        mesh = link.meshes.get(mesh_id)
+        if mesh is None:
+            continue
+        key = keys.get(mesh_id)
+        if key is None:
+            reason = "no material"
+        elif key == mesh_id:
+            reason = "its own" if mesh_id in link.materials else "vertex paint only"
+        elif key == mesh.get("material_source"):
+            reason = "instance of %s" % (link.meshes.get(key, {}).get("name", key))
+        else:
+            reason = "shares geometry with %s" % (link.meshes.get(key, {}).get("name", key))
+        print("  %-24s -> %-24s %s" % (
+            mesh["name"][:24], (link.meshes.get(key, {}).get("name", key or "-"))[:24], reason))
 
 
 def watch(enable=True):

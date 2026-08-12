@@ -16,6 +16,8 @@ translations -- see MAPPING_NOTES:
     absorption       -> transmission_depth  (Beer-Lambert distance, inverted)
     interior roughness                      (no OpenPBR equivalent; kept as data)
 """
+import math
+
 from pxr import Gf, Sdf, UsdShade
 
 SURFACE = "ND_open_pbr_surface_surfaceshader"
@@ -27,6 +29,9 @@ IMAGE_FLOAT = "ND_image_float"
 GEOMPROP_UV = "ND_geompropvalue_vector2"
 LUMINANCE = "ND_luminance_color3"
 MULTIPLY_FLOAT = "ND_multiply_float"
+MULTIPLY_UV = "ND_multiply_vector2"
+ROTATE_UV = "ND_rotate2d_vector2"
+ADD_UV = "ND_add_vector2"
 EXTRACT = "ND_extract_color3"
 
 # Nomad's subsurface reads about twice as strong as OpenPBR's at the same weight,
@@ -124,11 +129,57 @@ def _uv_reader(stage, path, cache):
     return cache["uv"]
 
 
-def _texture(stage, path, name, blob, colour, cache):
+ADDRESS = {"repeat": "periodic", "clamp": "clamp", "mirror": "mirror"}
+
+
+def _uv_transform(stage, path, name, channel, source):
+    """Nomad's per-channel uv offset/scale/rotation, in USD's v-up space.
+
+    Nomad applies T + Rz(-r).S.uv in its own v-down space. Flipping v (which we
+    do when authoring st) turns that into T' + Rz(r).S'.uv with T' = (Tx, 1-Ty)
+    and S' = (Sx, -Sy) -- the same algebra the Blender client uses.
+    """
+    offset = [float(v) for v in (channel.get("offset") or (0.0, 0.0))[:2]]
+    scale = [float(v) for v in (channel.get("scale") or (1.0, 1.0))[:2]]
+    rotation = float(channel.get("rotation", 0.0))
+    if offset == [0.0, 0.0] and scale == [1.0, 1.0] and rotation == 0.0:
+        return source
+
+    # the v flip makes the scale (Sx, -Sy), so it is always authored
+    node = _shader(stage, path, name + "_uv_scale", MULTIPLY_UV)
+    node.CreateInput("in1", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        source.ConnectableAPI(), "out")
+    node.CreateInput("in2", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(scale[0], -scale[1]))
+    node.CreateOutput("out", Sdf.ValueTypeNames.Float2)
+    result = node
+    if rotation:
+        node = _shader(stage, path, name + "_uv_rotate", ROTATE_UV)
+        node.CreateInput("in", Sdf.ValueTypeNames.Float2).ConnectToSource(
+            result.ConnectableAPI(), "out")
+        node.CreateInput("amount", Sdf.ValueTypeNames.Float).Set(math.degrees(rotation))
+        node.CreateOutput("out", Sdf.ValueTypeNames.Float2)
+        result = node
+    node = _shader(stage, path, name + "_uv_offset", ADD_UV)
+    node.CreateInput("in1", Sdf.ValueTypeNames.Float2).ConnectToSource(
+        result.ConnectableAPI(), "out")
+    node.CreateInput("in2", Sdf.ValueTypeNames.Float2).Set(
+        Gf.Vec2f(offset[0], 1.0 - offset[1]))
+    node.CreateOutput("out", Sdf.ValueTypeNames.Float2)
+    return node
+
+
+def _texture(stage, path, name, blob, colour, cache, channel=None):
     node = _shader(stage, path, name + "_texture", IMAGE_COLOR if colour else IMAGE_FLOAT)
     node.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(blob["path"])
+    source = _uv_reader(stage, path, cache)
+    if channel:
+        source = _uv_transform(stage, path, name, channel, source)
+        node.CreateInput("uaddressmode", Sdf.ValueTypeNames.String).Set(
+            ADDRESS.get(channel.get("wrap_s"), "periodic"))
+        node.CreateInput("vaddressmode", Sdf.ValueTypeNames.String).Set(
+            ADDRESS.get(channel.get("wrap_t"), "periodic"))
     node.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(
-        _uv_reader(stage, path, cache).ConnectableAPI(), "out")
+        source.ConnectableAPI(), "out")
     node.CreateOutput("out", Sdf.ValueTypeNames.Color3f if colour
                       else Sdf.ValueTypeNames.Float)
     return node
@@ -153,7 +204,8 @@ def _base_color(stage, path, shader, block, mesh, available):
         paint.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
         sources.append(paint)
     if textured:
-        sources.append(_texture(stage, path, "color", available["color"], True, cache))
+        sources.append(_texture(stage, path, "color", available["color"], True, cache,
+                                (block.get("textures") or {}).get("color")))
 
     if not sources:
         return None
@@ -177,7 +229,8 @@ def _scalars(stage, path, shader, block, mesh, available):
     for nomad_key, target in SCALARS:
         paint = PAINT.get(nomad_key)
         if nomad_key in available:
-            node = _texture(stage, path, nomad_key, available[nomad_key], False, cache)
+            node = _texture(stage, path, nomad_key, available[nomad_key], False, cache,
+                            (block.get("textures") or {}).get(nomad_key))
             shader.CreateInput(target, Sdf.ValueTypeNames.Float).ConnectToSource(
                 node.ConnectableAPI(), "out")
         elif paint and mesh is not None and paint[0] in mesh:

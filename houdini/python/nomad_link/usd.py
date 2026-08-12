@@ -401,8 +401,12 @@ def uv_transform(stage, path, name, channel, reader):
     node.CreateIdAttr("UsdTransform2d")
     node.CreateInput("in", Sdf.ValueTypeNames.Float2).ConnectToSource(
         reader.ConnectableAPI(), "result")
-    node.CreateInput("translation", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(*offset[:2]))
-    node.CreateInput("scale", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(*scale[:2]))
+    # our st is v-flipped relative to Nomad, which turns T + Rz(-r).S into
+    # T' + Rz(r).S' with T' = (Tx, 1-Ty) and S' = (Sx, -Sy)
+    node.CreateInput("translation", Sdf.ValueTypeNames.Float2).Set(
+        Gf.Vec2f(float(offset[0]), 1.0 - float(offset[1])))
+    node.CreateInput("scale", Sdf.ValueTypeNames.Float2).Set(
+        Gf.Vec2f(float(scale[0]), -float(scale[1])))
     node.CreateInput("rotation", Sdf.ValueTypeNames.Float).Set(math.degrees(rotation))
     node.CreateOutput("result", Sdf.ValueTypeNames.Float2)
     return node

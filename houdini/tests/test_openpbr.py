@@ -202,3 +202,33 @@ check(abs(flat_shader.GetInput("geometry_opacity").Get() - 0.25) < 1e-6,
       % flat_shader.GetInput("geometry_opacity").Get())
 
 print("\nadditive ok")
+
+# ---- texture repeats: Nomad's scale/offset/rotation and wrap modes
+tiled = Cache()
+tiled.add_mesh(quad_and_tri(mesh_id="t1", name="Tiled"))
+tiled.materials["t1"] = {"textures": {"color": {
+    "texture_id": "tiletex", "name": "tile.png", "scale": [4.0, 2.0],
+    "offset": [0.25, 0.0], "rotation": 1.5708, "wrap_s": "clamp", "wrap_t": "mirror"}}}
+tiled.textures["tiletex"] = {"name": "tile.png", "path": "/tmp/nomad_tex/tile.png"}
+tiled_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(tiled_stage, tiled, material_style="openpbr")
+image = UsdShade.Shader(tiled_stage.GetPrimAtPath("/nomad/Materials/Tiled/color_texture"))
+check(bool(image), "the texture node exists")
+check(image.GetInput("uaddressmode").Get() == "clamp"
+      and image.GetInput("vaddressmode").Get() == "mirror",
+      "wrap modes reach the image node as MaterialX address modes")
+placed = UsdShade.Shader(image.GetInput("texcoord").GetConnectedSource()[0].GetPrim())
+check(placed.GetIdAttr().Get() == openpbr.ADD_UV, "the uv chain ends with the offset")
+offset = placed.GetInput("in2").Get()
+check(abs(offset[0] - 0.25) < 1e-6 and abs(offset[1] - 1.0) < 1e-6,
+      "the offset is v-flipped: (Tx, 1-Ty) = %s" % (offset,))
+rotate = UsdShade.Shader(placed.GetInput("in1").GetConnectedSource()[0].GetPrim())
+check(rotate.GetIdAttr().Get() == openpbr.ROTATE_UV
+      and abs(rotate.GetInput("amount").Get() - 90.0) < 0.01,
+      "rotation in degrees")
+scale_node = UsdShade.Shader(rotate.GetInput("in").GetConnectedSource()[0].GetPrim())
+repeat = scale_node.GetInput("in2").Get()
+check(abs(repeat[0] - 4.0) < 1e-6 and abs(repeat[1] + 2.0) < 1e-6,
+      "the repeat reaches the chain, with v negated: %s" % (repeat,))
+
+print("\nuv transform ok")

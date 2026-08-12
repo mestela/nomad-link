@@ -25,18 +25,26 @@ GEOMPROP_FLOAT = "ND_geompropvalue_float"
 IMAGE_COLOR = "ND_image_color3"
 IMAGE_FLOAT = "ND_image_float"
 GEOMPROP_UV = "ND_geompropvalue_vector2"
+LUMINANCE = "ND_luminance_color3"
+EXTRACT = "ND_extract_color3"
 
 # Nomad's subsurface reads about twice as strong as OpenPBR's at the same weight,
 # from comparing a character against Nomad's own render. One constant, so it can be
 # overridden (nomad_link.openpbr.SUBSURFACE_WEIGHT = ...) without editing this file.
 SUBSURFACE_WEIGHT = 0.5
 
+# An additive material has no PBR equivalent: it is approximated as unlit emission
+# whose opacity follows the image's luminance, so black is transparent and bright
+# areas add light. This is the emission level that approximation uses.
+ADDITIVE_EMISSION = 1.0
+
 MAPPING_NOTES = {
     "reflectance": "specular_weight = reflectance * 2, so Nomad's 0.5 default becomes 1.0",
     "absorption": "transmission_depth = 1 / absorption_factor; Nomad's absorption is a "
                   "density, OpenPBR's is a distance",
     "refraction_interior_roughness": "no OpenPBR input; kept in customData",
-    "material_type": "additive, dithering and shadow_catcher have no OpenPBR equivalent",
+    "material_type": "additive is approximated as unlit emission with luminance-driven "
+                     "opacity; dithering and shadow_catcher have no equivalent",
     "subsurface_depth": "absent means Nomad's 0.15 default, negative means auto and the "
                         "magnitude is used; OpenPBR's own default radius is 1.0, a metre",
     "translucency": "defaults to true on every material, so it does NOT drive subsurface; "
@@ -87,6 +95,8 @@ def author(stage, path, block, textures, mesh=None):
     _scalars(stage, path, shader, block, mesh, available)
     _transmission(shader, block)
     _subsurface(shader, block, base)
+    if block.get("material_type") == "additive":
+        _additive(stage, path, shader, block, base)
     _emission(shader, block)
 
     kept = {key: value for key, value in block.items()
@@ -234,6 +244,41 @@ def _subsurface(shader, block, base=None):
     # Anything is better than OpenPBR's default radius of 1.0, which is a metre.
     depth = abs(float(block.get("subsurface_depth", 0.15))) or 0.15
     shader.CreateInput("subsurface_radius", Sdf.ValueTypeNames.Float).Set(depth)
+
+
+def _additive(stage, path, shader, block, base):
+    """Approximate Nomad's additive blending: unlit, black transparent, bright adds.
+
+    There is no additive mode in a PBR surface, so: no diffuse and no specular
+    response, the image drives emission, and opacity follows the image's
+    luminance so dark areas let the background through unchanged.
+    """
+    shader.CreateInput("base_weight", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("specular_weight", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("emission_luminance", Sdf.ValueTypeNames.Float).Set(ADDITIVE_EMISSION)
+
+    if base is None:  # a flat colour with no texture or paint behind it
+        colour = block.get("color") or [1.0, 1.0, 1.0]
+        shader.CreateInput("emission_color", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(*colour[:3]))
+        luminance = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
+        shader.CreateInput("geometry_opacity", Sdf.ValueTypeNames.Float).Set(float(luminance))
+        return
+
+    shader.CreateInput("emission_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+        base.ConnectableAPI(), "out")
+    # geometry_opacity is a float, so the colour has to be reduced before it can drive it
+    luminance = _shader(stage, path, "additive_luminance", LUMINANCE)
+    luminance.CreateInput("in", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+        base.ConnectableAPI(), "out")
+    luminance.CreateOutput("out", Sdf.ValueTypeNames.Color3f)
+    channel = _shader(stage, path, "additive_opacity", EXTRACT)
+    channel.CreateInput("in", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+        luminance.ConnectableAPI(), "out")
+    channel.CreateInput("index", Sdf.ValueTypeNames.Int).Set(0)
+    channel.CreateOutput("out", Sdf.ValueTypeNames.Float)
+    shader.CreateInput("geometry_opacity", Sdf.ValueTypeNames.Float).ConnectToSource(
+        channel.ConnectableAPI(), "out")
 
 
 def _emission(shader, block):

@@ -155,3 +155,36 @@ check(bool(UsdShade.Shader(preview_stage.GetPrimAtPath("/nomad/Materials/Skin/Pr
       "UsdPreviewSurface is still available as a style")
 
 print("\nall good")
+
+# ---- additive: unlit emission, opacity from the image's luminance
+additive = Cache()
+additive.add_mesh(quad_and_tri(mesh_id="a1", name="Glow"))
+additive.materials["a1"] = {"material_type": "additive", "color": [1.0, 1.0, 1.0],
+                            "textures": {"color": {"texture_id": "glowtex", "name": "flare.png"}}}
+additive.textures["glowtex"] = {"name": "flare.png", "path": "/tmp/nomad_tex/flare.png"}
+add_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(add_stage, additive, material_style="openpbr")
+glow = UsdShade.Shader(add_stage.GetPrimAtPath("/nomad/Materials/Glow/OpenPBR"))
+check(glow.GetInput("base_weight").Get() == 0.0, "additive is unlit: no diffuse")
+check(glow.GetInput("specular_weight").Get() == 0.0, "and no specular highlight")
+check(glow.GetInput("emission_color").HasConnectedSource(), "the image drives emission")
+check(abs(glow.GetInput("emission_luminance").Get() - openpbr.ADDITIVE_EMISSION) < 1e-6,
+      "emission_luminance is set")
+opacity_source = UsdShade.Shader(glow.GetInput("geometry_opacity").GetConnectedSource()[0].GetPrim())
+check(opacity_source.GetIdAttr().Get() == openpbr.EXTRACT,
+      "opacity comes through a float extract, since geometry_opacity is not a colour")
+lum = UsdShade.Shader(opacity_source.GetInput("in").GetConnectedSource()[0].GetPrim())
+check(lum.GetIdAttr().Get() == openpbr.LUMINANCE,
+      "and the extract reads a luminance node, so black is transparent")
+
+flat = Cache()
+flat.add_mesh(quad_and_tri(mesh_id="a2", name="FlatGlow"))
+flat.materials["a2"] = {"material_type": "additive", "color": [0.0, 0.0, 0.0]}
+flat_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(flat_stage, flat, material_style="openpbr")
+flat_shader = UsdShade.Shader(flat_stage.GetPrimAtPath("/nomad/Materials/FlatGlow/OpenPBR"))
+check(flat_shader.GetInput("geometry_opacity").HasConnectedSource()
+      or flat_shader.GetInput("geometry_opacity").Get() is not None,
+      "an additive material with no texture still gets an opacity")
+
+print("\nadditive ok")

@@ -28,6 +28,9 @@ CAPABILITIES = [
     "session_config",
     "mesh_delta_receive",
     "mesh_instance",
+    "hierarchy",      # parent_id / child_index / group (0.11.37)
+    "scene_batch",
+    "skew",           # USD holds a skewed matrix directly, so no synthetic groups
     "ngon",
     "material",
     "light",
@@ -104,6 +107,7 @@ class Client:
         self.materials = {}       # mesh_id -> material block (PROTOCOL.md section 10)
         self.lights = {}          # link_id -> light header
         self.cameras = {}         # link_id -> camera_object header
+        self.groups = {}          # link_id -> transform-only node (0.11.37)
         self.textures = {}        # texture_id -> {"name": ..., "path": ...} on disk
         self.display = {}         # display_config settings
         self.working_camera = {}  # newest `camera` message: Nomad's own viewport
@@ -164,6 +168,7 @@ class Client:
         self.materials.clear()
         self.lights.clear()
         self.cameras.clear()
+        self.groups.clear()
         del self.order[:]
         self._requested.clear()
         self._pending_states.clear()
@@ -287,6 +292,11 @@ class Client:
             self._requested.clear()
         elif kind == "mesh_full":
             mesh = convert.decode_mesh(header, binary)
+            previous = self.meshes.get(mesh["mesh_id"])
+            if previous is not None:  # absent means leave as-is, not reset
+                for key in ("visible", "locked", "parent_id", "child_index"):
+                    if key not in header and key in previous:
+                        mesh[key] = previous[key]
             self._store(mesh)
             if "material" in header:  # mesh_full carries the same block as `material`
                 self._store_material(header["mesh_id"], header["material"])
@@ -303,12 +313,17 @@ class Client:
         elif kind == "object_state":
             self._object_state(header)
         elif kind == "object_delete":
-            link_id = header.get("link_id")
-            gone = [store.pop(link_id, None) for store in
-                    (self.meshes, self.lights, self.cameras, self.materials)]
-            if any(item is not None for item in gone):
-                self.order = [i for i in self.order if i in self.meshes]
-                self._touch()
+            self._delete(header.get("link_id"))
+        elif kind == "group":
+            link_id = header.get("link_id", "")
+            entry = self.groups.setdefault(link_id, {"link_id": link_id, "type": "group"})
+            entry.update(header)
+            self._touch()
+        elif kind == "scene_batch":
+            # applied in array order as one step: a re-parent has to land before
+            # the delete that would otherwise orphan it
+            for message in header.get("messages", ()):
+                self._handle(message, b"")
         elif kind == "material":
             self._store_material(header.get("mesh_id", ""), header.get("material", {}))
         elif kind in ("light", "camera_object"):
@@ -346,7 +361,8 @@ class Client:
     def _object_state(self, header):
         """Rename/move/hide, for whichever kind of object the id belongs to."""
         link_id = header.get("link_id")
-        entry = self.meshes.get(link_id) or self.lights.get(link_id) or self.cameras.get(link_id)
+        entry = (self.meshes.get(link_id) or self.lights.get(link_id)
+                 or self.cameras.get(link_id) or self.groups.get(link_id))
         if entry is None:
             # a transfer can announce state before the geometry it describes;
             # hold it rather than dropping the only word we get on visibility
@@ -354,6 +370,13 @@ class Client:
             return
         entry["name"] = header.get("name", entry.get("name", ""))
         entry["visible"] = bool(header.get("visible", entry.get("visible", True)))
+        if "locked" in header:
+            entry["locked"] = bool(header["locked"])
+        # absent parent_id leaves parenting alone, so a peer that does not model
+        # hierarchy never flattens a tree (PROTOCOL.md section 3)
+        for key in ("parent_id", "child_index", "local_matrix", "world_matrix_parent"):
+            if key in header:
+                entry[key] = header[key]
         if "world_matrix" in header:
             entry["world_matrix"] = list(header["world_matrix"])
         self._touch()
@@ -402,6 +425,28 @@ class Client:
         self.textures[texture_id] = {"name": name, "path": path}
         self._requested_textures.discard(texture_id)
         self._touch()
+
+    def _delete(self, link_id):
+        """object_delete takes the node and its children (0.11.37)."""
+        if not link_id:
+            return
+        doomed = [link_id]
+        stores = (self.meshes, self.lights, self.cameras, self.groups)
+        while True:
+            children = [
+                other for store in stores for other, entry in store.items()
+                if entry.get("parent_id") in doomed and other not in doomed
+            ]
+            if not children:
+                break
+            doomed.extend(children)
+        removed = False
+        for victim in doomed:
+            for store in stores + (self.materials,):
+                removed = store.pop(victim, None) is not None or removed
+        if removed:
+            self.order = [i for i in self.order if i in self.meshes]
+            self._touch()
 
     def _store(self, mesh):
         mesh_id = mesh["mesh_id"]

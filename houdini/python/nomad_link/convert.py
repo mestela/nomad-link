@@ -145,10 +145,16 @@ def decode_mesh(header, binary):
         # mesh_full does not document `visible` (only object_state and
         # mesh_instance do), but honour it if Nomad sends one anyway
         "visible": bool(header.get("visible", True)),
-        # not in protocol 1: an id identifying this object's parent, so a
-        # hierarchy can be rebuilt. Harmless when absent, used when present.
-        "parent_id": header.get("parent_id", ""),
+        # 0.11.37 hierarchy: absent parent_id means "leave parenting alone", which
+        # is not the same as "" (the scene root), so absence is kept as None
+        "parent_id": header.get("parent_id"),
+        "child_index": header.get("child_index"),
+        "locked": bool(header.get("locked", False)),
         "smooth_shading": bool(header.get("smooth_shading", True)),
+        # when parent_id is set these are the parent's world and the local
+        # transform relative to it; prefer them over the flattened world_matrix
+        "local_matrix": header.get("local_matrix"),
+        "world_matrix_parent": header.get("world_matrix_parent"),
         "positions": _read(binary, header["position_offset"], count * 3, "<f4").reshape(-1, 3).copy(),
     }
 

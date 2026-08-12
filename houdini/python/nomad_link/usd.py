@@ -126,6 +126,11 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
     if import_cameras:
         for link_id, camera in cache.cameras.items():
             entries[link_id] = ("camera", camera)
+    # transform-only nodes (0.11.37): Nomad groups, and the synthetic /skew wrappers
+    # sent to peers that cannot hold a skewed matrix -- we advertise `skew`, so we
+    # should not see those, but a group is a plain Xform either way
+    for link_id, group in getattr(cache, "groups", {}).items():
+        entries.setdefault(link_id, ("group", group))
 
     if import_environment:
         dome = author_environment(stage, getattr(cache, "display", {}), cache.textures,
@@ -136,7 +141,16 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
     children = {}
     for link_id, (_kind, entry) in entries.items():
         parent = entry.get("parent_id") or ""
+        # an unknown parent is not an error: keep the node at the root and let a
+        # later cook re-parent it once the parent arrives (PROTOCOL.md section 9)
         children.setdefault(parent if parent in entries else "", []).append(link_id)
+    # child_index is advisory sibling order; ties keep arrival order
+    for siblings in children.values():
+        order = {link_id: index for index, link_id in enumerate(siblings)}
+        siblings.sort(key=lambda link_id: (
+            entries[link_id][1].get("child_index") if
+            entries[link_id][1].get("child_index") is not None else order[link_id],
+            order[link_id]))
 
     names = {"": taken}
 
@@ -148,6 +162,9 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
             world = entry.get("world_matrix", IDENTITY)
             local = world
             if parent_id:
+                # with parent_id set, Nomad sends local_matrix relative to the
+                # parent and world_matrix stays the flattened value for peers
+                # without hierarchy: prefer the pair (PROTOCOL.md section 3)
                 parent_entry = entries[parent_id][1]
                 local = entry.get("local_matrix") or convert.compose_local(
                     world, parent_entry.get("world_matrix", IDENTITY))
@@ -160,8 +177,10 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
             elif kind == "light":
                 author_light(stage, path, entry, scale=scale, light_scale=light_scale,
                              matrix_values=local)
-            else:
+            elif kind == "camera":
                 author_camera(stage, path, entry, scale=scale, matrix_values=local)
+            else:
+                author_group(stage, path, entry, scale=scale, matrix_values=local)
             written.append(path)
             author_branch(link_id, path)
 
@@ -254,6 +273,8 @@ def author_mesh(stage, path, mesh, scale=1.0, matrix_values=None):
         author_face_groups(geom, mesh)
 
     prim.SetCustomDataByKey("nomad:mesh_id", mesh.get("mesh_id", ""))
+    if mesh.get("locked"):
+        prim.SetCustomDataByKey("nomad:locked", True)
     prim.SetCustomDataByKey("nomad:geometry_id", mesh.get("geometry_id", ""))
     return geom
 
@@ -410,6 +431,20 @@ def uv_transform(stage, path, name, channel, reader):
     node.CreateInput("rotation", Sdf.ValueTypeNames.Float).Set(math.degrees(rotation))
     node.CreateOutput("result", Sdf.ValueTypeNames.Float2)
     return node
+
+
+def author_group(stage, path, group, scale=1.0, matrix_values=None):
+    """A transform-only node: Nomad group, Blender empty, USD Xform."""
+    xform = UsdGeom.Xform.Define(stage, path)
+    prim = xform.GetPrim()
+    values = group.get("world_matrix", IDENTITY) if matrix_values is None else matrix_values
+    UsdGeom.Xformable(prim).AddTransformOp().Set(matrix(scaled_matrix(values, scale)))
+    if not group.get("visible", True):
+        UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    prim.SetCustomDataByKey("nomad:link_id", group.get("link_id", ""))
+    if group.get("locked"):
+        prim.SetCustomDataByKey("nomad:locked", True)
+    return xform
 
 
 # ---------------------------------------------------------------- environment

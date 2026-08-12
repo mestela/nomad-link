@@ -1,5 +1,11 @@
 # Two protocol additions: hierarchy and visibility
 
+> **Answered in 0.11.37.** Both landed, in the shape this asked for: `parent_id`
+> holding the parent's `link_id`, with `world_matrix` still carrying the flattened
+> value for peers that ignore it, and `visible` on `mesh_full`. Nomad went further
+> than proposed, adding `group` nodes, `child_index`, `scene_batch`, `locked` and a
+> `skew` capability. Kept for the record; nothing here is outstanding.
+
 Written while building the Houdini bridge. Both are additive and backwards
 compatible (§11 says ignore unknown fields), and the Houdini client already
 implements the receiving side of both, so they light up the moment Nomad sends

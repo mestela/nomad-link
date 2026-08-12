@@ -107,6 +107,11 @@ ss = UsdShade.Shader(skin_stage.GetPrimAtPath("/nomad/Materials/Head/OpenPBR"))
 check(abs(ss.GetInput("subsurface_weight").Get() - openpbr.SUBSURFACE_WEIGHT) < 1e-6,
       "a subsurface material scatters, at the calibrated weight (%.2f)" % openpbr.SUBSURFACE_WEIGHT)
 check(openpbr.SUBSURFACE_WEIGHT == 0.5, "the calibration constant is the tuned 0.5")
+scale = ss.GetInput("subsurface_radius_scale").Get()
+check(abs(scale[0] - 1.0) < 1e-6 and abs(scale[1] - 0.3) < 1e-6 and abs(scale[2] - 0.2) < 1e-6,
+      "the subsurface tint becomes per-channel scatter distance, not albedo: %s" % (scale,))
+check(ss.GetInput("subsurface_color").HasConnectedSource(),
+      "the scattering albedo follows base_color rather than the tint")
 check(abs(ss.GetInput("subsurface_radius").Get() - 0.00624) < 1e-6,
       "the sculpt's depth reaches subsurface_radius, not OpenPBR's 1 metre: %r"
       % ss.GetInput("subsurface_radius").Get())

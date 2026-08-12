@@ -43,6 +43,9 @@ MAPPING_NOTES = {
                     "only material_type == subsurface scatters",
     "subsurface_weight": "scaled by SUBSURFACE_WEIGHT (0.5), matched by eye against "
                          "Nomad's render rather than derived",
+    "subsurface_color": "Nomad's is a bleed-through tint, OpenPBR's is the scattering "
+                        "albedo: the tint goes to subsurface_radius_scale and the albedo "
+                        "follows base_color",
 }
 
 # scalar Nomad value -> OpenPBR input. Vertex paint or a texture replaces these
@@ -80,10 +83,10 @@ def author(stage, path, block, textures, mesh=None):
                  for name, channel in channels.items()
                  if textures.get(channel.get("texture_id"))}
 
-    _base_color(stage, path, shader, block, mesh, available)
+    base = _base_color(stage, path, shader, block, mesh, available)
     _scalars(stage, path, shader, block, mesh, available)
     _transmission(shader, block)
-    _subsurface(shader, block)
+    _subsurface(shader, block, base)
     _emission(shader, block)
 
     kept = {key: value for key, value in block.items()
@@ -142,7 +145,7 @@ def _base_color(stage, path, shader, block, mesh, available):
         sources.append(_texture(stage, path, "color", available["color"], True, cache))
 
     if not sources:
-        return
+        return None
     result = sources[0]
     for index, node in enumerate(sources[1:]):
         combine = _shader(stage, path, "base_mix%d" % index, MULTIPLY_COLOR)
@@ -154,7 +157,7 @@ def _base_color(stage, path, shader, block, mesh, available):
         result = combine
     shader.CreateInput("base_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(
         result.ConnectableAPI(), "out")
-    shader.GetPrim().GetStage()  # keep the cache alive until the material is written
+    return result
 
 
 def _scalars(stage, path, shader, block, mesh, available):
@@ -198,21 +201,34 @@ def _transmission(shader, block):
             1.0 / factor if factor > 1e-6 else 0.0)
 
 
-def _subsurface(shader, block):
+def _subsurface(shader, block, base=None):
     """Only material_type "subsurface" scatters.
 
     `translucency` defaults to true on every Nomad material, so treating it as
     subsurface turns scattering on for the whole scene.
+
+    Nomad's subsurface_color is the tint of the light that bleeds through, but
+    OpenPBR's subsurface_color is the scattering *albedo* -- setting one from
+    the other washes the whole surface with that colour (a red head, for skin).
+    The tint belongs on subsurface_radius_scale, which is per-channel scatter
+    distance and whose own default (1, 0.5, 0.25) is skin-shaped. The scattering
+    albedo then follows the surface: base colour and vertex paint.
     """
     if block.get("material_type") != "subsurface":
         return
     weight = max(0.0, min(1.0, float(block.get("translucency_factor", 1.0))))
     shader.CreateInput("subsurface_weight", Sdf.ValueTypeNames.Float).Set(
         weight * SUBSURFACE_WEIGHT)
+
     colour = block.get("subsurface_color")
     if colour is not None:
-        shader.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).Set(
-            Gf.Vec3f(*colour[:3]))
+        values = [max(0.0, float(channel)) for channel in colour[:3]]
+        peak = max(values) or 1.0
+        shader.CreateInput("subsurface_radius_scale", Sdf.ValueTypeNames.Color3f).Set(
+            Gf.Vec3f(*[value / peak for value in values]))
+    if base is not None:
+        shader.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+            base.ConnectableAPI(), "out")
     # Only edited fields travel, so an absent depth means Nomad's own default
     # (0.15). Negative means auto, where the magnitude is the best guess we have.
     # Anything is better than OpenPBR's default radius of 1.0, which is a metre.

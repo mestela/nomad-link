@@ -26,6 +26,11 @@ IMAGE_COLOR = "ND_image_color3"
 IMAGE_FLOAT = "ND_image_float"
 GEOMPROP_UV = "ND_geompropvalue_vector2"
 
+# Nomad's subsurface reads about twice as strong as OpenPBR's at the same weight,
+# from comparing a character against Nomad's own render. One constant, so it can be
+# overridden (nomad_link.openpbr.SUBSURFACE_WEIGHT = ...) without editing this file.
+SUBSURFACE_WEIGHT = 0.5
+
 MAPPING_NOTES = {
     "reflectance": "specular_weight = reflectance * 2, so Nomad's 0.5 default becomes 1.0",
     "absorption": "transmission_depth = 1 / absorption_factor; Nomad's absorption is a "
@@ -36,6 +41,8 @@ MAPPING_NOTES = {
                         "magnitude is used; OpenPBR's own default radius is 1.0, a metre",
     "translucency": "defaults to true on every material, so it does NOT drive subsurface; "
                     "only material_type == subsurface scatters",
+    "subsurface_weight": "scaled by SUBSURFACE_WEIGHT (0.5), matched by eye against "
+                         "Nomad's render rather than derived",
 }
 
 # scalar Nomad value -> OpenPBR input. Vertex paint or a texture replaces these
@@ -199,8 +206,9 @@ def _subsurface(shader, block):
     """
     if block.get("material_type") != "subsurface":
         return
+    weight = max(0.0, min(1.0, float(block.get("translucency_factor", 1.0))))
     shader.CreateInput("subsurface_weight", Sdf.ValueTypeNames.Float).Set(
-        max(0.0, min(1.0, float(block.get("translucency_factor", 1.0)))))
+        weight * SUBSURFACE_WEIGHT)
     colour = block.get("subsurface_color")
     if colour is not None:
         shader.CreateInput("subsurface_color", Sdf.ValueTypeNames.Color3f).Set(

@@ -62,8 +62,8 @@ check(shader.GetIdAttr().Get() == openpbr.SURFACE, "the shader is the OpenPBR su
 check(bool(material.GetSurfaceOutput("mtlx").GetConnectedSource()),
       "it is connected on the mtlx render context, which is what Karma reads")
 
-check(abs(shader.GetInput("subsurface_weight").Get() - 0.8) < 1e-6,
-      "translucency became subsurface_weight")
+check(abs(shader.GetInput("subsurface_weight").Get() - 0.8 * openpbr.SUBSURFACE_WEIGHT) < 1e-6,
+      "translucency_factor scales the calibrated subsurface weight")
 check(abs(shader.GetInput("subsurface_radius").Get() - 0.15) < 1e-6,
       "subsurface_depth became subsurface_radius")
 check(abs(shader.GetInput("specular_ior").Get() - 1.4) < 1e-6, "ior transferred")
@@ -104,7 +104,9 @@ skin.materials["s1"] = {"material_type": "subsurface", "subsurface_color": [1.0,
 skin_stage = Usd.Stage.CreateInMemory()
 usd.author_scene(skin_stage, skin, material_style="openpbr")
 ss = UsdShade.Shader(skin_stage.GetPrimAtPath("/nomad/Materials/Head/OpenPBR"))
-check(abs(ss.GetInput("subsurface_weight").Get() - 1.0) < 1e-6, "a subsurface material scatters")
+check(abs(ss.GetInput("subsurface_weight").Get() - openpbr.SUBSURFACE_WEIGHT) < 1e-6,
+      "a subsurface material scatters, at the calibrated weight (%.2f)" % openpbr.SUBSURFACE_WEIGHT)
+check(openpbr.SUBSURFACE_WEIGHT == 0.5, "the calibration constant is the tuned 0.5")
 check(abs(ss.GetInput("subsurface_radius").Get() - 0.00624) < 1e-6,
       "the sculpt's depth reaches subsurface_radius, not OpenPBR's 1 metre: %r"
       % ss.GetInput("subsurface_radius").Get())

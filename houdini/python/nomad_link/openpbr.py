@@ -26,6 +26,7 @@ IMAGE_COLOR = "ND_image_color3"
 IMAGE_FLOAT = "ND_image_float"
 GEOMPROP_UV = "ND_geompropvalue_vector2"
 LUMINANCE = "ND_luminance_color3"
+MULTIPLY_FLOAT = "ND_multiply_float"
 EXTRACT = "ND_extract_color3"
 
 # Nomad's subsurface reads about twice as strong as OpenPBR's at the same weight,
@@ -257,12 +258,16 @@ def _additive(stage, path, shader, block, base):
     shader.CreateInput("specular_weight", Sdf.ValueTypeNames.Float).Set(0.0)
     shader.CreateInput("emission_luminance", Sdf.ValueTypeNames.Float).Set(ADDITIVE_EMISSION)
 
+    # the material's own opacity scales the whole effect, as it does in Nomad
+    opacity = float(block.get("opacity", 1.0))
+
     if base is None:  # a flat colour with no texture or paint behind it
         colour = block.get("color") or [1.0, 1.0, 1.0]
         shader.CreateInput("emission_color", Sdf.ValueTypeNames.Color3f).Set(
             Gf.Vec3f(*colour[:3]))
         luminance = 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
-        shader.CreateInput("geometry_opacity", Sdf.ValueTypeNames.Float).Set(float(luminance))
+        shader.CreateInput("geometry_opacity", Sdf.ValueTypeNames.Float).Set(
+            float(luminance) * opacity)
         return
 
     shader.CreateInput("emission_color", Sdf.ValueTypeNames.Color3f).ConnectToSource(
@@ -277,8 +282,16 @@ def _additive(stage, path, shader, block, base):
         luminance.ConnectableAPI(), "out")
     channel.CreateInput("index", Sdf.ValueTypeNames.Int).Set(0)
     channel.CreateOutput("out", Sdf.ValueTypeNames.Float)
+    source = channel
+    if opacity != 1.0:
+        scaled = _shader(stage, path, "additive_opacity_scale", MULTIPLY_FLOAT)
+        scaled.CreateInput("in1", Sdf.ValueTypeNames.Float).ConnectToSource(
+            channel.ConnectableAPI(), "out")
+        scaled.CreateInput("in2", Sdf.ValueTypeNames.Float).Set(opacity)
+        scaled.CreateOutput("out", Sdf.ValueTypeNames.Float)
+        source = scaled
     shader.CreateInput("geometry_opacity", Sdf.ValueTypeNames.Float).ConnectToSource(
-        channel.ConnectableAPI(), "out")
+        source.ConnectableAPI(), "out")
 
 
 def _emission(shader, block):

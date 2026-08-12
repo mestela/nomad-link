@@ -177,14 +177,28 @@ lum = UsdShade.Shader(opacity_source.GetInput("in").GetConnectedSource()[0].GetP
 check(lum.GetIdAttr().Get() == openpbr.LUMINANCE,
       "and the extract reads a luminance node, so black is transparent")
 
+# the material's opacity scales the additive effect
+faded = Cache()
+faded.add_mesh(quad_and_tri(mesh_id="a3", name="HalfGlow"))
+faded.materials["a3"] = {"material_type": "additive", "opacity": 0.5, "color": [1.0, 1.0, 1.0],
+                         "textures": {"color": {"texture_id": "glowtex", "name": "flare.png"}}}
+faded.textures["glowtex"] = {"name": "flare.png", "path": "/tmp/nomad_tex/flare.png"}
+faded_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(faded_stage, faded, material_style="openpbr")
+half = UsdShade.Shader(faded_stage.GetPrimAtPath("/nomad/Materials/HalfGlow/OpenPBR"))
+scale_node = UsdShade.Shader(half.GetInput("geometry_opacity").GetConnectedSource()[0].GetPrim())
+check(scale_node.GetIdAttr().Get() == openpbr.MULTIPLY_FLOAT,
+      "the material opacity multiplies the luminance-driven opacity")
+check(abs(scale_node.GetInput("in2").Get() - 0.5) < 1e-6, "by the value Nomad sent")
+
 flat = Cache()
 flat.add_mesh(quad_and_tri(mesh_id="a2", name="FlatGlow"))
-flat.materials["a2"] = {"material_type": "additive", "color": [0.0, 0.0, 0.0]}
+flat.materials["a2"] = {"material_type": "additive", "color": [1.0, 1.0, 1.0], "opacity": 0.25}
 flat_stage = Usd.Stage.CreateInMemory()
 usd.author_scene(flat_stage, flat, material_style="openpbr")
 flat_shader = UsdShade.Shader(flat_stage.GetPrimAtPath("/nomad/Materials/FlatGlow/OpenPBR"))
-check(flat_shader.GetInput("geometry_opacity").HasConnectedSource()
-      or flat_shader.GetInput("geometry_opacity").Get() is not None,
-      "an additive material with no texture still gets an opacity")
+check(abs(flat_shader.GetInput("geometry_opacity").Get() - 0.25) < 1e-6,
+      "with no texture, opacity is the flat colour's luminance times the material opacity: %r"
+      % flat_shader.GetInput("geometry_opacity").Get())
 
 print("\nadditive ok")

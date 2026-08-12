@@ -118,6 +118,12 @@ def enable_sync(kwargs):
                          sync_materials=True, sync_cameras=True)
 
 
+def clear_button(kwargs):
+    """Forget the cached scene: Nomad has moved on to a different project."""
+    client().clear()
+    refresh_inputs(client().revision)
+
+
 def get_selection(kwargs):
     client().request("request_selection")
 

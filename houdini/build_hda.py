@@ -85,6 +85,9 @@ def in_parm_group():
                 "Ask Nomad for its current selection."),
          button("getscene", "Get Scene", "get_scene",
                 "Ask Nomad for every object in the scene."),
+         button("clear", "Clear Cache", "clear_button",
+                "Forget everything received so far. The cache is shared by the "
+                "session, so deleting the node does not reset it."),
          source]
         + transform_parms("Nomad (glTF) is counter-clockwise front-facing, Houdini is clockwise.")
         + [toggle("importuv", "Import UVs", True),
@@ -156,6 +159,10 @@ def import_parm_group():
                 "Ask Nomad for its current selection."),
          button("getscene", "Get Scene", "get_scene",
                 "Ask Nomad for every object in the scene."),
+         button("clear", "Clear Cache", "clear_button",
+                "Forget everything received so far. The cache is shared by the "
+                "session, so deleting the node does not reset it -- use this after "
+                "loading a different project in Nomad."),
          button("enablesync", "Enable All Sync Channels", "enable_sync",
                 "Nomad ships with sync_lights and sync_materials off, so those "
                 "edits only arrive on an explicit Get Scene until this is set."),

@@ -14,6 +14,7 @@ try:
     from .nodes import (
         answer_request,
         connect_button,
+        clear_button,
         cook_import,
         cook_in,
         cook_out,
@@ -34,6 +35,7 @@ except ImportError:  # no hou: the codecs and the client still work
 __all__ = [
     "DEFAULT_PORT", "PROTOCOL", "client", "connect", "disconnect",
     "connect_button", "disconnect_button", "get_scene", "get_selection", "enable_sync",
+    "clear_button", "clear",
     "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
@@ -48,6 +50,12 @@ def connect(host="", port=DEFAULT_PORT):
 
 def disconnect():
     client().disconnect()
+
+
+def clear():
+    """Forget the cached scene, textures and display settings."""
+    client().clear()
+    return "cache cleared"
 
 
 def sync_all():

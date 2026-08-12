@@ -267,5 +267,18 @@ check(wait(link, lambda: lop.evalParm("revision") != revision), "the LOP's revis
 check(bool(UsdLux.DistantLight(lop.stage().GetPrimAtPath("/nomad/Rim"))),
       "the LOP recooked and the new light is on the stage")
 
+# Clear Cache: the cache is a session singleton, so a node cannot own its reset
+check(len(link.meshes) > 0 and len(link.textures) > 0, "there is something to clear")
+lop.parm("clear").pressButton()
+check(not link.meshes and not link.lights and not link.cameras and not link.textures,
+      "Clear Cache empties the scene, lights, cameras and textures")
+check(len(lop.stage().GetPrimAtPath("/nomad").GetChildren()) == 0
+      or not lop.stage().GetPrimAtPath("/nomad/Sculpt"),
+      "and the stage empties with it")
+check(len(node_in.geometry().points()) == 0, "the In SOP empties too")
+
+nomad.send(*nomad_quad_and_tri())
+check(wait(link, lambda: "m1" in link.meshes), "and a fresh scene loads after clearing")
+
 link.disconnect()
 print("\nall good")

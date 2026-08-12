@@ -169,6 +169,22 @@ class Client:
         self._pending_states.clear()
         self._touch()
 
+    def clear(self):
+        """Forget everything cached, including textures and display settings.
+
+        The cache lives in the session rather than on a node, so deleting and
+        recreating a node does not reset it: loading a different project in
+        Nomad otherwise leaves the previous scene behind.
+        """
+        self.clear_scene()
+        self.textures.clear()
+        self._requested_textures.clear()
+        self.display.clear()
+        self.working_camera = {}
+        self._pending_acks.clear()
+        self.message = "Cache cleared"
+        self._touch()
+
     def set_session(self, **flags):
         """Change Nomad's live-sync channels (PROTOCOL.md section 5).
 

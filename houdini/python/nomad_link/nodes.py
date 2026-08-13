@@ -289,8 +289,18 @@ def cook_import(lop):
 
     link = client()
     # surface per-object failures through report() rather than only stdout
-    usd.report_problems = lambda problems: [
-        link.note("authoring: %s" % problem) for problem in problems]
+    def _note(problems):
+        # hundreds of identical lines bury everything else in the log
+        seen = []
+        for problem in problems:
+            if problem not in seen:
+                seen.append(problem)
+        for problem in seen[:3]:
+            link.note("authoring: %s" % problem)
+        if len(problems) > len(seen[:3]):
+            link.note("authoring: ...and %d more like it" % (len(problems) - len(seen[:3])))
+
+    usd.report_problems = _note
 
     _eval(lop, "revision")  # cook dependency: new Nomad data bumps this
     started = time.time()

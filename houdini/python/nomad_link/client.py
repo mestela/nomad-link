@@ -16,6 +16,9 @@ PROTOCOL = 1
 DEFAULT_PORT = 48312
 CLIENT_NAME = "Houdini"
 PING_INTERVAL = 10.0
+# Nomad has been seen going quiet mid-transfer and resuming the moment a packet
+# arrives from us, so keep the conversation going while a scene is in flight
+PING_INTERVAL_RECEIVING = 0.25
 
 # honest hello: we receive geometry, object state and the scene objects that the
 # LOP side authors on a stage, and we send mesh_full. We do not advertise
@@ -310,7 +313,8 @@ class Client:
                 self.note("error handling %s: %s" % (header.get("type"), exc))
         if self.connection.status == "Error" and self.message != self.connection.error:
             self.message = self.connection.error or "Connection lost"
-        if self.connected and time.time() - self._last_ping > PING_INTERVAL:
+        interval = PING_INTERVAL_RECEIVING if self.receiving else PING_INTERVAL
+        if self.connected and time.time() - self._last_ping > interval:
             self._last_ping = time.time()
             self.send({"type": "ping"})
         now = time.time()
@@ -553,7 +557,13 @@ class Client:
         mesh["material_source"] = source.get("material_source") or source["mesh_id"]
         mesh["name"] = header.get("name", source["name"])
         mesh["visible"] = bool(header.get("visible", True))
+        mesh["locked"] = bool(header.get("locked", False))
         mesh["world_matrix"] = list(header.get("world_matrix", convert.IDENTITY))
+        # an instance shares geometry, not placement: every transform field is its
+        # own. Copying the source's left each instance claiming its original's
+        # local_matrix while carrying its own world_matrix, so the two disagreed.
+        for key in ("parent_id", "child_index", "local_matrix", "world_matrix_parent"):
+            mesh[key] = header.get(key)
         self._store(mesh)
 
     def _recover(self, mesh_id):

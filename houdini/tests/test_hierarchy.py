@@ -151,6 +151,29 @@ check(abs(bad_world.ExtractTranslation()[1] - 6.0) < 1e-6,
       "a local_matrix that contradicts world_matrix is derived instead: y=%.3f"
       % bad_world.ExtractTranslation()[1])
 
+# an instance carries its own placement, not the original's
+link.clear_scene()
+nomad.send({"type": "group", "link_id": "gp", "name": "Rig", "world_matrix": parent_world})
+nomad.send(*mesh("src", "Bolt", world_matrix=convert.IDENTITY))
+instance_local = list(convert.IDENTITY)
+instance_local[12] = 4.0
+nomad.send({"type": "mesh_instance", "mesh_id": "inst", "geometry_id": "src-geo",
+            "name": "Bolt Copy", "visible": True, "parent_id": "gp",
+            "local_matrix": instance_local, "world_matrix_parent": parent_world,
+            "world_matrix": convert.multiply(parent_world, instance_local)})
+check(wait(lambda: "inst" in link.meshes), "the instance arrives")
+copy = link.meshes["inst"]
+check(copy["parent_id"] == "gp", "it keeps its own parent, not the original's")
+check(copy["local_matrix"] == instance_local, "and its own local_matrix")
+check(link.meshes["src"].get("local_matrix") is None,
+      "while the original is untouched")
+inst_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(inst_stage, link, material_style="preview")
+placed = UsdGeom.Xformable(inst_stage.GetPrimAtPath(
+    "/nomad/Rig/Bolt_Copy")).ComputeLocalToWorldTransform(0)
+check(abs(placed.ExtractTranslation()[0] - 8.0) < 1e-6,
+      "so it lands where Nomad says: x=%.3f, expected 8" % placed.ExtractTranslation()[0])
+
 link.disconnect()
 os.remove(client_module._token_path())
 print("\nall good")

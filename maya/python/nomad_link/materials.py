@@ -20,7 +20,11 @@ The judgement calls, which are the same ones as on the Houdini side:
 """
 import maya.cmds as cmds
 
-SUBSURFACE_WEIGHT = 0.5   # Nomad's subsurface reads about twice as strong
+# Matched by eye against an Arnold render: its subsurface is far stronger than
+# Nomad's at the same weight, and strong enough at 0.5 to bury the vertex paint
+# entirely. The Houdini bridge wants 0.5 for OpenPBR in Karma, so this is a
+# per-renderer number, not a property of Nomad. Override it if yours differs.
+SUBSURFACE_WEIGHT = 0.05
 
 # surface type -> the attributes this bridge sets
 SURFACES = {

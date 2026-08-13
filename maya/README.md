@@ -117,8 +117,17 @@ Two things worth knowing:
   as glTF and therefore Nomad. (The Houdini bridge does flip -- Houdini is
   clockwise.)
 - **v is flipped**, since Maya's uv origin is bottom-left and Nomad's is top-left.
-- **Units.** Maya is centimetres by default and Nomad's are arbitrary; `SCALE`
-  in `scene.py` multiplies incoming positions.
+- **Units.** Maya is centimetres by default and Nomad's are arbitrary. `SCALE`
+  in `scene.py` multiplies incoming positions and defaults to 1.0, which makes a
+  two-unit character two centimetres tall. Geometry does not care, but anything
+  calibrated to real scale does: Arnold's subsurface radius and physically based
+  lights both assume centimetres. `nomad_link.scene.SCALE = 100.0` treats a Nomad
+  unit as a metre, which may behave better -- set it before pulling a scene.
+- **Subsurface weight** is scaled by `materials.SUBSURFACE_WEIGHT`, 0.05, matched
+  by eye against an Arnold render. Arnold's subsurface is far stronger than
+  Nomad's at the same weight -- strong enough at 0.5 to bury the vertex paint
+  completely. The Houdini bridge wants 0.5 for OpenPBR in Karma, so it is a
+  per-renderer number rather than anything about Nomad.
 - **Matrices** are row-major with row vectors, like Houdini and USD, so Nomad's
   column-major list transfers unchanged.
 

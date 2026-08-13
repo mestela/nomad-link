@@ -48,7 +48,7 @@ skin, _ = materials.build({"material_type": "subsurface", "color": [0.9, 0.7, 0.
                            "subsurface_depth": 0.00624, "translucency": True,
                            "translucency_factor": 1.0}, name="skin")
 check(abs(attr(skin, "subsurface") - materials.SUBSURFACE_WEIGHT) < 1e-6,
-      "scatters at the calibrated weight")
+      "scatters at the calibrated weight (%.2f)" % materials.SUBSURFACE_WEIGHT)
 check(attr(skin, "subsurfaceColor") == (0.9, 0.7, 0.6),
       "the scattering albedo follows the surface, not the tint: %s"
       % (attr(skin, "subsurfaceColor"),))

@@ -27,7 +27,13 @@ from . import convert, materials
 from .client import client
 
 ROOT = "nomad"
-SCALE = 1.0          # multiplies incoming positions; Maya's unit is the centimetre
+# Multiplies incoming positions. Nomad's units are arbitrary and Maya's are
+# centimetres, so 1.0 makes a two-unit character two centimetres tall. That is
+# fine for geometry but not for anything calibrated to real scale -- Arnold's
+# subsurface radius and physical lights both assume centimetres -- so 100.0
+# (a Nomad unit as a metre) may behave better. Set nomad_link.scene.SCALE before
+# pulling a scene.
+SCALE = 1.0
 _built = {}          # link_id -> MObjectHandle for the transform
 _shaders = {}        # mesh_id -> (shader, shading group)
 _revision = -1

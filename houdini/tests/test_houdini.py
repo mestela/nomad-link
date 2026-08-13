@@ -243,8 +243,10 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
 nomad.send({"type": "material", "mesh_id": "m1", "material": {
     "textures": {"color": {"texture_id": "tex-e2e", "name": "skin.png",
                            "wrap_s": "clamp", "scale": [2.0, 1.0]}}}})
-check(wait(link, lambda: any(h.get("type") == "request_texture" for h, _ in nomad.received)),
-      "an unseen texture id is requested")
+# requests are held until the link has been properly quiet, since asking during
+# a transfer makes Nomad restart it
+check(wait(link, lambda: any(h.get("type") == "request_texture" for h, _ in nomad.received), 14.0),
+      "an unseen texture id is requested once the link is quiet")
 nomad.send({"type": "texture", "texture_id": "tex-e2e", "name": "skin.png",
             "binary_size": len(PNG)}, PNG)
 check(wait(link, lambda: "tex-e2e" in link.textures), "the blob arrives and is cached")

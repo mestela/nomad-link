@@ -516,15 +516,39 @@ class Client:
         """
         self._deferred.append(header)
 
-    DEFER_QUIET = 1.5  # seconds of silence before it is safe to ask for something
+    # A stalled transfer looks exactly like a finished one from here, and asking
+    # for anything mid-transfer makes Nomad restart it from the beginning. So wait
+    # long enough that a stall has had time to resume, and drop requests that the
+    # transfer has since answered by itself.
+    DEFER_QUIET = 10.0
 
     def _flush_deferred(self, now, quiet):
         if not self._deferred or not self.connected or self.receiving:
             return
         if quiet < self.DEFER_QUIET:
             return
-        self.send(self._deferred.pop(0))
-        self._quiet_since = now  # one per quiet window, so the reply lands first
+        while self._deferred:
+            header = self._deferred.pop(0)
+            if self._still_needed(header):
+                self.send(header)
+                self._quiet_since = now  # one per window, so the reply lands first
+                return
+
+    def _still_needed(self, header):
+        """A deferred request the transfer has already satisfied is just noise."""
+        if header.get("type") == "request_texture":
+            return header.get("texture_id") not in self.textures
+        if header.get("type") == "request_mesh":
+            wanted = header.get("link_id")
+            mesh = self.meshes.get(wanted)
+            if mesh is None:
+                return True  # an instance we could not resolve at all: still wanted
+            # the geometry it shares may have arrived later in the same transfer
+            return not any(other.get("geometry_id") == mesh.get("geometry_id")
+                           and other.get("positions") is not None
+                           and other["mesh_id"] != wanted
+                           for other in self.meshes.values())
+        return True
 
     def _store_texture(self, header, binary):
         """Blobs are immutable per id; cache them on disk so USD can reference them."""

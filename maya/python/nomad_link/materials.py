@@ -53,9 +53,22 @@ COLOUR_READERS = (
 )
 COLOUR_SET = "nomad"
 
+# painted channel -> (colour set, the shader input it drives, which component).
+# A scalar rides in a colour set as grey, so one component of the reader is it.
+PAINTED_INPUTS = (
+    ("color", "nomad", "base_color", "outColor"),
+    ("rough", "nomad_rough", "roughness", "outColorR"),
+    ("metallic", "nomad_metallic", "metalness", "outColorR"),
+)
 
-def colour_reader():
-    """A node that reads the vertex colour set, if a renderer supplies one."""
+
+def colour_reader(colour_set=COLOUR_SET):
+    """A node that reads a vertex colour set, if a renderer supplies one.
+
+    Maya has no native equivalent, and the ones that exist are renderer nodes:
+    Viewport 2.0 does not evaluate them, so painted values show in a render
+    rather than in the viewport.
+    """
     for plugin, node_type, attribute in COLOUR_READERS:
         try:
             if not cmds.pluginInfo(plugin, query=True, loaded=True):
@@ -63,8 +76,9 @@ def colour_reader():
         except Exception:
             continue
         try:
-            node = cmds.shadingNode(node_type, asUtility=True, name="nomad_vertex_colour")
-            cmds.setAttr("%s.%s" % (node, attribute), COLOUR_SET, type="string")
+            node = cmds.shadingNode(node_type, asUtility=True,
+                                    name="nomad_" + colour_set)
+            cmds.setAttr("%s.%s" % (node, attribute), colour_set, type="string")
             return node
         except Exception:
             continue
@@ -90,7 +104,7 @@ def set_colour(node, attribute, rgb):
         pass
 
 
-def build(block, name="nomad_material", kind=DEFAULT_SURFACE, painted=False):
+def build(block, name="nomad_material", kind=DEFAULT_SURFACE, painted=()):
     """Create a shader and its shading group. Returns (shader, shading group)."""
     table = surface_table(kind)
     shader = cmds.shadingNode(table["node"], asShader=True, name=name)
@@ -98,16 +112,26 @@ def build(block, name="nomad_material", kind=DEFAULT_SURFACE, painted=False):
                       name=shader + "SG")
     cmds.connectAttr(shader + ".outColor", group + ".surfaceShader", force=True)
     apply_block(shader, block, kind)
-    if painted:
-        # Nomad paints per vertex; the base colour is only the tint under it
-        reader = colour_reader()
-        if reader:
-            try:
-                cmds.connectAttr(reader + ".outColor",
-                                 "%s.%s" % (shader, table["base_color"]), force=True)
-            except Exception:
-                pass
+    for key in painted or ():
+        wire_painted(shader, table, key)
     return shader, group
+
+
+def wire_painted(shader, table, key):
+    """Drive one shader input from the colour set carrying that painted channel."""
+    for painted_key, colour_set, target, component in PAINTED_INPUTS:
+        if painted_key != key or target not in table:
+            continue
+        reader = colour_reader(colour_set)
+        if not reader:
+            return None
+        try:
+            cmds.connectAttr("%s.%s" % (reader, component),
+                             "%s.%s" % (shader, table[target]), force=True)
+        except Exception:
+            return None
+        return reader
+    return None
 
 
 def apply_block(shader, block, kind=DEFAULT_SURFACE):

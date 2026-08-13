@@ -237,6 +237,10 @@ def pluginInfo(name, **kwargs):
     return name in SCENE.get("plugins", [])
 
 
+def attributeQuery(name, **kwargs):
+    return True
+
+
 def listRelatives(paths, **kwargs):
     """Takes one name or a list, as the real command does."""
     if isinstance(paths, str):
@@ -321,7 +325,7 @@ def install():
     for name in ("objExists", "createNode", "parent", "ls", "delete", "setAttr",
                  "internalVar", "listRelatives", "sets", "shadingNode",
                  "connectAttr", "getAttr", "camera", "refresh", "undoInfo",
-                 "pluginInfo", "window", "deleteUI",
+                 "pluginInfo", "attributeQuery", "window", "deleteUI",
                  "columnLayout", "text",
                  "textFieldGrp", "button", "separator", "showWindow", "scriptJob"):
         setattr(cmds, name, globals()[name])

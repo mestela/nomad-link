@@ -85,10 +85,22 @@ aiStandardSurface -- is a table and a node name rather than a rewrite.
 
 Two things worth knowing:
 
-- **Vertex paint displays but does not render.** The colour set shows in
-  Viewport 2.0; driving a shader from it needs a reader node, and there is no
-  universal one (`aiUserDataColor` for Arnold, `VRayVertexColors` for V-Ray).
-  That arrives with the renderer-specific tables.
+- **Vertex paint renders, but does not preview.** It is the other way round
+  from what you might expect. Maya has no native node that reads a colour set
+  into a shader, so this uses the renderer's -- `aiUserDataColor` for Arnold,
+  `VRayVertexColors` for V-Ray -- and **Viewport 2.0 does not evaluate those**:
+  the base colour falls back to its default until you render or open IPR. To
+  see the paint in the viewport, display the colour set directly instead
+  (Display > Polygons > Color Display).
+
+  Each painted channel rides in its own colour set, since a colour set is the
+  only per-vertex channel a Maya shader can read: `nomad` carries colour and
+  alpha, `nomad_rough`, `nomad_metallic`, `nomad_mask` and `nomad_density` carry
+  a scalar as grey. Colour, roughness and metalness are wired to the shader;
+  mask and density are carried but not connected, as in Houdini.
+
+  mtoa also ignores colour sets unless the shape has `aiExportColors` set, which
+  the bridge does when it writes them.
 - Nomad's `subsurface_color` is the colour of light bleeding through, not a
   scattering albedo. It drives the scatter radius per channel; the albedo
   follows the surface colour. Using it as an albedo turns skin into red wax.

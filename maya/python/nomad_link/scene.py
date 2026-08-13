@@ -117,8 +117,19 @@ def build_mesh(mesh, parent=None, scale=SCALE):
     dag = OpenMaya.MFnDagNode(transform)
     dag.setName(valid_name(mesh["name"]))
     apply_uvs(fn, mesh)
-    apply_colours(fn, mesh)
+    if apply_colours(fn, mesh):
+        export_colours(dag.fullPathName())
     return dag.fullPathName()
+
+
+def export_colours(path):
+    """mtoa does not hand colour sets to Arnold unless the shape says so."""
+    try:
+        for shape in cmds.listRelatives(path, shapes=True, fullPath=True) or []:
+            if cmds.attributeQuery("aiExportColors", node=shape, exists=True):
+                cmds.setAttr(shape + ".aiExportColors", True)
+    except Exception:
+        pass
 
 
 def float_array(values):
@@ -141,30 +152,55 @@ def apply_uvs(fn, mesh):
     fn.assignUVs(int_array(mesh["sizes"]), int_array(mesh["corner_uv"]))
 
 
+# Nomad paints scalars per vertex, and a colour set is the only per-vertex
+# channel a Maya shader can read, so each rides in one as grey.
+#   mesh key -> colour set name
+PAINT_SETS = (("color", "nomad"), ("rough", "nomad_rough"),
+              ("metallic", "nomad_metallic"), ("mask", "nomad_mask"),
+              ("density", "nomad_density"))
+
+
+def colour_array(rgba):
+    try:
+        return OpenMaya.MColorArray(rgba)
+    except (TypeError, ValueError):
+        array = OpenMaya.MColorArray()
+        for values in rgba:
+            array.append(OpenMaya.MColor(values))
+        return array
+
+
 def apply_colours(fn, mesh):
-    """Vertex paint as a colour set, alpha included."""
-    if "color" not in mesh:
-        return
+    """Vertex paint as colour sets: colour with its alpha, scalars as grey."""
     import numpy
 
-    rgb = mesh["color"]
-    alpha = mesh.get("alpha")
-    if alpha is None:
-        alpha = numpy.ones(len(rgb), rgb.dtype)
-    rgba = numpy.column_stack((rgb, alpha)).tolist()
-    try:
-        colours = OpenMaya.MColorArray(rgba)
-    except (TypeError, ValueError):
-        colours = OpenMaya.MColorArray()
-        for values in rgba:
-            colours.append(OpenMaya.MColor(values))
-    vertices = int_array(numpy.arange(len(rgba), dtype="i4"))
-    try:
-        fn.createColorSet("nomad", False)
-        fn.setCurrentColorSetName("nomad")
-    except Exception:
-        pass
-    fn.setVertexColors(colours, vertices)
+    written = []
+    for key, set_name in PAINT_SETS:
+        values = mesh.get(key)
+        if values is None:
+            continue
+        if key == "color":
+            alpha = mesh.get("alpha")
+            if alpha is None:
+                alpha = numpy.ones(len(values), values.dtype)
+            rgba = numpy.column_stack((values, alpha))
+        else:
+            grey = numpy.asarray(values, "f4")
+            rgba = numpy.column_stack((grey, grey, grey, numpy.ones(len(grey), "f4")))
+        vertices = int_array(numpy.arange(len(rgba), dtype="i4"))
+        try:
+            fn.createColorSet(set_name, False)
+            fn.setCurrentColorSetName(set_name)
+            fn.setVertexColors(colour_array(rgba.tolist()), vertices)
+            written.append(set_name)
+        except Exception:
+            continue
+    if written:
+        try:  # paint the viewport with the colour set, and let Arnold see it
+            fn.setCurrentColorSetName(written[0])
+        except Exception:
+            pass
+    return written
 
 
 def update_points(path, mesh, scale=SCALE):
@@ -341,7 +377,7 @@ def material_group(mesh_id, mesh, link):
     if key not in _shaders:
         _shaders[key] = materials.build(
             link.materials[key], name=valid_name(mesh["name"]) + "_mat",
-            painted="color" in mesh)
+            painted=[key for key, _set in PAINT_SETS if key in mesh])
     return _shaders[key][1]
 
 

@@ -69,6 +69,8 @@ check(abs(data["uvs"][2][1] - 0.0) < 1e-6,
       "v flipped to Maya's bottom-left origin: %s" % (data["uvs"][2],))
 check(len(data["colours"]) == 5 and abs(data["colours"][0][2] - 0.75) < 0.01,
       "vertex colours with alpha")
+check(data["colour_set"] in ("nomad", "nomad_rough", "nomad_metallic"),
+      "the paint lands in a named colour set: %s" % data["colour_set"])
 check(built[0].endswith("Head"), "the object is named after Nomad's: %s" % built[0])
 
 # ---- a sculpt stroke patches the mesh instead of rebuilding it

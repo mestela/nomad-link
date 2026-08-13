@@ -147,8 +147,28 @@ link._store(painted)
 link.materials["m3"] = {"color": [1.0, 1.0, 1.0]}
 scene.rebuild(link.revision + 3)
 readers = [name for name, node in SCENE["shaders"].items() if node["type"] == "aiUserDataColor"]
-check(readers, "a colour reader is created when Arnold is loaded: %s" % list(SCENE["shaders"]))
+check(readers, "a colour reader is created when Arnold is loaded: %s" % readers)
 check(any(source.startswith(readers[0]) for source, _dest in SCENE["connections"]),
       "and it drives the shader")
+check(any("aiExportColors" in plug for plug in SCENE["attributes"]),
+      "the shape is told to export its colour sets, or Arnold never sees them")
+
+# every painted channel Nomad sends should reach the shader, not just colour
+scene._shaders.clear()
+SCENE["connections"][:] = []
+SCENE["shaders"].clear()
+full = mesh("m4", "Full")
+full["color"] = numpy.tile([0.5, 0.5, 0.5], (3, 1))
+full["rough"] = numpy.linspace(0, 1, 3)
+full["metallic"] = numpy.linspace(0, 1, 3)
+link._store(full)
+link.materials["m4"] = {"color": [1.0, 1.0, 1.0]}
+scene.rebuild(link.revision + 4)
+targets = [dest.split(".")[-1] for _source, dest in SCENE["connections"]]
+check("baseColor" in targets, "painted colour drives base colour")
+check("specularRoughness" in targets, "painted roughness drives roughness: %s" % targets)
+check("metalness" in targets, "painted metalness drives metalness")
+sets = [name for name in SCENE["shaders"] if name.startswith("nomad_nomad")]
+check(len(sets) >= 3, "one reader per colour set: %s" % sets)
 
 print("\nall good")

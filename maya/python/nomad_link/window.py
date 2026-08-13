@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: MIT
-"""A small window: connect, pull a scene, see what is happening."""
+"""A small window: connect, pull a scene, see what is happening.
+
+Named window.py rather than ui.py because nomad_link.ui() is the function
+that opens it, and a submodule sharing a name with a function in __init__
+shadows it in both directions.
+"""
 import maya.cmds as cmds
 
-from . import client as _client
-from .client import client
+# not `from . import client`: the package defines a client() function, which
+# shadows the module of the same name
+from .client import DEFAULT_PORT, client
 
 WINDOW = "nomadLinkWindow"
 
@@ -31,7 +37,7 @@ def show():
 
 def _connect(field):
     host = cmds.textFieldGrp(field, query=True, text=True).strip()
-    client().connect(host, _client.DEFAULT_PORT)
+    client().connect(host, DEFAULT_PORT)
     _refresh()
 
 

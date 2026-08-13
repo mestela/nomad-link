@@ -118,3 +118,15 @@ scene.rebuild(link.revision + 1)
 check("|Hand" in SCENE["deleted"], "an object gone from Nomad is removed from Maya")
 
 print("\nall good")
+
+# ---- the entry points import cleanly (a name in __init__ shadows a submodule
+# of the same name, which is how nomad_link.ui() broke first time out)
+import nomad_link  # noqa: E402
+import importlib  # noqa: E402
+
+window = importlib.import_module("nomad_link.window")
+check(hasattr(window, "show"), "the window module imports")
+check(window.DEFAULT_PORT == 48312, "and reached the real client module, not the function")
+check(callable(nomad_link.ui), "nomad_link.ui() survives the window module being imported")
+for name in ("connect", "disconnect", "get_scene", "get_selection", "clear", "report", "ui"):
+    check(callable(getattr(nomad_link, name)), "nomad_link.%s exists" % name)

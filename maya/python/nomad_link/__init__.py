@@ -82,5 +82,8 @@ def report(lines=30):
 
 def ui():
     """Open the little control window."""
-    from . import ui as window
+    # the module is window.py, not ui.py: a submodule and a function of the same
+    # name fight -- the function shadows the module on import, and importing the
+    # module then replaces the function
+    from . import window
     return window.show()

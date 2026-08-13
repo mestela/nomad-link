@@ -212,12 +212,49 @@ def internalVar(**kwargs):
     return "/tmp/"
 
 
+def window(*args, **kwargs):
+    return args[0] if args else "window"
+
+
+def deleteUI(*args, **kwargs):
+    return None
+
+
+def columnLayout(*args, **kwargs):
+    return "layout"
+
+
+def text(*args, **kwargs):
+    return args[0] if args else "text"
+
+
+def textFieldGrp(*args, **kwargs):
+    return args[0] if args else "field"
+
+
+def button(*args, **kwargs):
+    return "button"
+
+
+def separator(*args, **kwargs):
+    return "separator"
+
+
+def showWindow(*args, **kwargs):
+    return None
+
+
+def scriptJob(*args, **kwargs):
+    return 1
+
+
 def install():
     """Put the fakes in sys.modules so `import maya.cmds` picks them up."""
     maya = types.ModuleType("maya")
     cmds = types.ModuleType("maya.cmds")
     for name in ("objExists", "createNode", "parent", "ls", "delete", "setAttr",
-                 "internalVar"):
+                 "internalVar", "window", "deleteUI", "columnLayout", "text",
+                 "textFieldGrp", "button", "separator", "showWindow", "scriptJob"):
         setattr(cmds, name, globals()[name])
     api = types.ModuleType("maya.api")
     openmaya = types.ModuleType("maya.api.OpenMaya")

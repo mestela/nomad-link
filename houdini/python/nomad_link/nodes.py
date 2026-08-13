@@ -69,10 +69,10 @@ def status_text():
     link = client()
     if link.receiving:
         # no total is on the wire, so count what has arrived rather than invent one
-        stalled = link.quiet_for() > 4.0
+        quiet = link.quiet_for()
         return "Receiving: %d objects...%s" % (
             link.object_count,
-            "  (stalled -- bring Nomad to the foreground)" if stalled else "")
+            "  (nothing for %ds -- see nomad_link.report())" % quiet if quiet > 5.0 else "")
     if link.connected and link.object_count:
         return "%s - %s (%d objects)" % (link.status, link.message, link.object_count)
     return "%s - %s" % (link.status, link.message)

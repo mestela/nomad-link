@@ -68,6 +68,14 @@ def report(lines=30):
     print("traffic     : %d messages, %.1f MB in %.1fs"
           % (stats["messages"], stats["bytes"] / 1048576.0, span))
     print("pump        : %d calls, worst gap %.2fs" % (stats["pumps"], stats["worst_gap"]))
+    try:
+        from . import scene
+        alive = [link_id for link_id, handle in scene._built.items()
+                 if scene.path_of(handle)]
+        print("built       : %d objects in Maya, of %d tracked"
+              % (len(alive), len(scene._built)))
+    except ImportError:
+        pass
     for name in list(link.order)[:12]:
         mesh = link.meshes.get(name)
         if mesh is not None:

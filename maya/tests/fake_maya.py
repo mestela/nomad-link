@@ -66,6 +66,17 @@ class MObject:
         self.name = name
 
 
+class MObjectHandle:
+    def __init__(self, obj):
+        self.obj = obj
+
+    def isValid(self):
+        return self.obj.name in SCENE["nodes"]
+
+    def object(self):
+        return self.obj
+
+
 class MDagPath:
     def __init__(self, name):
         self.name = name
@@ -149,7 +160,7 @@ class MFnMesh:
 
 class MFnDagNode:
     def __init__(self, obj):
-        self.obj = obj
+        self.obj = obj if isinstance(obj, MObject) else MObject(getattr(obj, "name", str(obj)))
 
     def setName(self, name):
         entry = SCENE["nodes"].pop(self.obj.name, {"type": "transform"})
@@ -334,6 +345,7 @@ def install():
     for name in ("MPoint", "MColor", "MPointArray", "MIntArray", "MFloatArray",
                  "MColorArray", "MMatrix", "MTransformationMatrix", "MObject",
                  "MSelectionList", "MFnTransform", "MFnMesh", "MFnDagNode",
+                 "MObjectHandle", "MDagPath",
                  "MMessage", "MTimerMessage"):
         setattr(openmaya, name, globals()[name])
     maya.cmds = cmds

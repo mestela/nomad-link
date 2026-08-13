@@ -25,6 +25,10 @@ class MColor:
 
 
 class _Array(list):
+    def __init__(self, values=None):
+        # the real API 2.0 arrays take a whole sequence, which is the fast path
+        list.__init__(self, values or [])
+
     def append(self, value):
         list.append(self, value)
 
@@ -130,7 +134,9 @@ class MFnMesh:
         pass
 
     def setVertexColors(self, colours, vertices):
-        self.data["colours"] = [c.values for c in colours]
+        # the real MColorArray holds MColor; built from a sequence its entries
+        # are the raw tuples, so accept both
+        self.data["colours"] = [getattr(c, "values", c) for c in colours]
 
     def setPoints(self, points):
         self.data["points"] = list(points)
@@ -169,7 +175,7 @@ class MTimerMessage:
 
 
 SCENE = {"nodes": {}, "meshes": {}, "transforms": {}, "attributes": {},
-         "updates": [], "callbacks": {}, "deleted": []}
+         "updates": [], "callbacks": {}, "deleted": [], "shading": []}
 
 
 def reset():
@@ -210,6 +216,15 @@ def setAttr(plug, value, **kwargs):
 
 def internalVar(**kwargs):
     return "/tmp/"
+
+
+def listRelatives(path, **kwargs):
+    return [path + "Shape"]
+
+
+def sets(shapes, **kwargs):
+    SCENE["shading"].extend(shapes if isinstance(shapes, list) else [shapes])
+    return "initialShadingGroup"
 
 
 def window(*args, **kwargs):
@@ -253,7 +268,8 @@ def install():
     maya = types.ModuleType("maya")
     cmds = types.ModuleType("maya.cmds")
     for name in ("objExists", "createNode", "parent", "ls", "delete", "setAttr",
-                 "internalVar", "window", "deleteUI", "columnLayout", "text",
+                 "internalVar", "listRelatives", "sets", "window", "deleteUI",
+                 "columnLayout", "text",
                  "textFieldGrp", "button", "separator", "showWindow", "scriptJob"):
         setattr(cmds, name, globals()[name])
     api = types.ModuleType("maya.api")

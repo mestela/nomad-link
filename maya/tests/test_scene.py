@@ -58,7 +58,12 @@ check(len(data["points"]) == 5, "five points")
 check(list(data["counts"]) == [4, 3], "a quad and a triangle, not triangulated")
 check(list(data["connects"]) == [0, 1, 2, 3, 1, 4, 2],
       "winding is NOT flipped: Maya is counter-clockwise like glTF")
-check(abs(data["points"][4].x - 2.0) < 1e-6, "positions transfer")
+def x_of(point):
+    """The array may hold MPoint or the raw triples it was built from."""
+    return point.x if hasattr(point, "x") else point[0]
+
+
+check(abs(x_of(data["points"][4]) - 2.0) < 1e-6, "positions transfer")
 check(len(data["uvs"]) == 7, "per-corner uvs")
 check(abs(data["uvs"][2][1] - 0.0) < 1e-6,
       "v flipped to Maya's bottom-left origin: %s" % (data["uvs"][2],))
@@ -74,7 +79,7 @@ link.meshes["m1"] = moved
 scene.rebuild(link.revision + 1)
 check(len(SCENE["updates"]) == 1, "the existing mesh was patched, not recreated")
 check(len(SCENE["deleted"]) == 0, "nothing was deleted to do it")
-check(abs(SCENE["meshes"][built[0]]["points"][0].x - 9.0) < 1e-6, "the point moved")
+check(abs(x_of(SCENE["meshes"][built[0]]["points"][0]) - 9.0) < 1e-6, "the point moved")
 
 # ---- hierarchy and transforms
 link.meshes.clear()
@@ -130,3 +135,18 @@ check(window.DEFAULT_PORT == 48312, "and reached the real client module, not the
 check(callable(nomad_link.ui), "nomad_link.ui() survives the window module being imported")
 for name in ("connect", "disconnect", "get_scene", "get_selection", "clear", "report", "ui"):
     check(callable(getattr(nomad_link, name)), "nomad_link.%s exists" % name)
+
+# ---- an unassigned mesh renders flat green in Maya
+check(SCENE["shading"], "meshes are put in a shading group as they are built")
+
+# ---- the window's live status comes from the pump
+import nomad_link.window as window_module  # noqa: E402
+
+calls = []
+scene.on_status(lambda: calls.append(1))
+scene.status_changed()
+check(calls, "a status watcher is called from the pump")
+scene.on_status(lambda: (_ for _ in ()).throw(RuntimeError("gone")))
+scene.status_changed()
+scene.status_changed()
+check(len(calls) == 3, "a watcher that raises is dropped, not left to raise every pump")

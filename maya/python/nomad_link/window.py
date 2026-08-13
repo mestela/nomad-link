@@ -30,7 +30,10 @@ def show():
     cmds.button(label="Clear", command=lambda *_: _clear())
     cmds.separator(height=8, style="in")
     cmds.text("nomadLinkStatus", label="Disconnected", align="left")
+    cmds.text("nomadLinkStats", label="", align="left")
     cmds.showWindow(WINDOW)
+    from . import scene
+    scene.on_status(_refresh)  # the pump drives the label, so progress is live
     _refresh()
     return WINDOW
 
@@ -61,7 +64,7 @@ def _do(action):
 
 
 def _refresh():
-    """Status is polled by the window rather than pushed, to keep the pump cheap."""
+    """Called from the pump: one label edit, nothing heavier."""
     if not cmds.window(WINDOW, exists=True):
         return
     link = client()
@@ -69,6 +72,12 @@ def _refresh():
     if link.receiving:
         text = "Receiving: %d objects..." % link.object_count
     elif link.connected and link.object_count:
-        text = "%s (%d objects)" % (link.message, link.object_count)
+        text = "Connected (%d objects)" % link.object_count
     cmds.text("nomadLinkStatus", edit=True, label=text)
-    cmds.scriptJob(runOnce=True, idleEvent=lambda: None)
+
+    stats = link.stats
+    quiet = link.quiet_for() if stats["messages"] else 0.0
+    cmds.text("nomadLinkStats", edit=True, label=(
+        "%d meshes, %.1f MB%s" % (
+            len(link.meshes), stats["bytes"] / 1048576.0,
+            ", nothing for %ds" % quiet if quiet > 5 else "")))

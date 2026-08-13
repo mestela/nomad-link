@@ -66,19 +66,37 @@ def dag_path(name):
 
 # --------------------------------------------------------------------- meshes
 
+def point_array(positions):
+    """MPointArray from (n, 3) floats.
+
+    The constructor converts a whole sequence in C++; appending an MPoint per
+    vertex means hundreds of thousands of Python objects for one sculpt.
+    """
+    values = positions.tolist()
+    try:
+        return OpenMaya.MPointArray(values)
+    except (TypeError, ValueError):
+        array = OpenMaya.MPointArray()
+        for x, y, z in values:
+            array.append(OpenMaya.MPoint(x, y, z))
+        return array
+
+
+def int_array(values):
+    numbers = [int(v) for v in values.tolist()]
+    try:
+        return OpenMaya.MIntArray(numbers)
+    except (TypeError, ValueError):
+        array = OpenMaya.MIntArray()
+        for number in numbers:
+            array.append(number)
+        return array
+
+
 def mesh_arrays(mesh, scale=SCALE):
     """Nomad's arrays -> (points, face counts, face connects) for MFnMesh."""
-    positions = mesh["positions"] * scale
-    points = OpenMaya.MPointArray()
-    for x, y, z in positions.tolist():
-        points.append(OpenMaya.MPoint(x, y, z))
-    counts = OpenMaya.MIntArray()
-    for size in mesh["sizes"].tolist():
-        counts.append(int(size))
-    connects = OpenMaya.MIntArray()
-    for corner in mesh["corners"].tolist():
-        connects.append(int(corner))
-    return points, counts, connects
+    return (point_array(mesh["positions"] * scale),
+            int_array(mesh["sizes"]), int_array(mesh["corners"]))
 
 
 def build_mesh(mesh, parent=None, scale=SCALE):
@@ -97,7 +115,28 @@ def build_mesh(mesh, parent=None, scale=SCALE):
 
     apply_uvs(fn, mesh)
     apply_colours(fn, mesh)
+    assign_default_shader(path)
     return path
+
+
+def assign_default_shader(path):
+    """Without a shading group Maya draws the mesh flat green."""
+    try:
+        shapes = cmds.listRelatives(path, shapes=True, fullPath=True) or [path]
+        cmds.sets(shapes, edit=True, forceElement="initialShadingGroup")
+    except Exception:
+        pass
+
+
+def float_array(values):
+    numbers = [float(v) for v in values]
+    try:
+        return OpenMaya.MFloatArray(numbers)
+    except (TypeError, ValueError):
+        array = OpenMaya.MFloatArray()
+        for number in numbers:
+            array.append(number)
+        return array
 
 
 def apply_uvs(fn, mesh):
@@ -105,33 +144,28 @@ def apply_uvs(fn, mesh):
     if "texcoords" not in mesh:
         return
     texcoords = mesh["texcoords"]
-    us = OpenMaya.MFloatArray()
-    vs = OpenMaya.MFloatArray()
-    for u, v in texcoords.tolist():
-        us.append(float(u))
-        vs.append(1.0 - float(v))
-    fn.setUVs(us, vs)
-    counts = OpenMaya.MIntArray()
-    for size in mesh["sizes"].tolist():
-        counts.append(int(size))
-    ids = OpenMaya.MIntArray()
-    for index in mesh["corner_uv"].tolist():
-        ids.append(int(index))
-    fn.assignUVs(counts, ids)
+    fn.setUVs(float_array(texcoords[:, 0]), float_array(1.0 - texcoords[:, 1]))
+    fn.assignUVs(int_array(mesh["sizes"]), int_array(mesh["corner_uv"]))
 
 
 def apply_colours(fn, mesh):
     """Vertex paint as a colour set, alpha included."""
     if "color" not in mesh:
         return
-    colours = OpenMaya.MColorArray()
+    import numpy
+
+    rgb = mesh["color"]
     alpha = mesh.get("alpha")
-    for index, (r, g, b) in enumerate(mesh["color"].tolist()):
-        a = float(alpha[index]) if alpha is not None else 1.0
-        colours.append(OpenMaya.MColor((float(r), float(g), float(b), a)))
-    vertices = OpenMaya.MIntArray()
-    for index in range(len(colours)):
-        vertices.append(index)
+    if alpha is None:
+        alpha = numpy.ones(len(rgb), rgb.dtype)
+    rgba = numpy.column_stack((rgb, alpha)).tolist()
+    try:
+        colours = OpenMaya.MColorArray(rgba)
+    except (TypeError, ValueError):
+        colours = OpenMaya.MColorArray()
+        for values in rgba:
+            colours.append(OpenMaya.MColor(values))
+    vertices = int_array(numpy.arange(len(rgba), dtype="i4"))
     try:
         fn.createColorSet("nomad", False)
         fn.setCurrentColorSetName("nomad")
@@ -228,6 +262,19 @@ def apply_transform(path, mesh, link):
     cmds.setAttr(path + ".visibility", bool(mesh.get("visible", True)))
 
 
+_watchers = []
+
+
+def on_status(callback):
+    """Register something to be told when the link's state changes."""
+    if callback not in _watchers:
+        _watchers.append(callback)
+
+
 def status_changed():
-    """Called every pump; cheap by design."""
-    return
+    """Called every pump, so this stays cheap: the window redraws one label."""
+    for callback in list(_watchers):
+        try:
+            callback()
+        except Exception:
+            _watchers.remove(callback)

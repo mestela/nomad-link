@@ -145,15 +145,27 @@ class Client:
     def peer_has(self, capability):
         return capability in self.peer_capabilities
 
+    DISCOVER_TIMEOUT = 3.0
+
     def connect(self, host="", port=DEFAULT_PORT):
         self.disconnect()
         if not host:
             self.message = "Searching for Nomad..."
-            found = transport.discover(port, timeout=2.0)
+            found = transport.discover(port, timeout=self.DISCOVER_TIMEOUT)
             if not found:
-                self.message = "No Nomad answered the discovery broadcast"
-                return False
-            host, port = found
+                # Bonjour is Apple-only (PROTOCOL.md section 2), so a Windows or
+                # Linux host answers only the UDP broadcast -- which firewalls
+                # often eat. Fall back to wherever we connected last.
+                remembered = _load_tokens().get("last_host")
+                if remembered:
+                    host = remembered
+                    self.note("discovery found nothing; trying %s from last time" % host)
+                else:
+                    self.message = ("No Nomad answered. Type its address: discovery "
+                                    "needs a broadcast the network may be blocking.")
+                    return False
+            else:
+                host, port = found
         self.host, self.port = host, int(port)
         self.message = "Connecting to %s:%d..." % (self.host, self.port)
         self.connection.connect(
@@ -386,6 +398,7 @@ class Client:
             token = header.get("pair_token")
             if token:
                 _save_token(self.host, token)
+            _save_token("last_host", self.host)  # discovery is unreliable off Apple platforms
         elif kind == "pairing_pending":
             self.message = "Waiting for approval in Nomad's Link menu"
         elif kind == "error":

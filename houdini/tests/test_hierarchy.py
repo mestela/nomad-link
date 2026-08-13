@@ -137,19 +137,42 @@ check(abs(world_xform.GetRow3(0).GetLength() - 2.0) < 1e-6,
       "and inherits the parent's scale exactly once: %.3f"
       % world_xform.GetRow3(0).GetLength())
 
-# a local_matrix that disagrees with world_matrix must not be trusted
-bad_local = list(convert.IDENTITY)
-bad_local[13] = 99.0
-nomad.send(*mesh("bad", "Disagrees", parent_id="sp", local_matrix=bad_local,
+# the real case from a Nomad scene: a skewed node splits again, so
+# world_matrix_parent is an extra frame carrying a non-uniform scale and
+# local_matrix is identity relative to it. Using the pair under the parent prim
+# would drop that scale entirely -- 367 of 411 objects in the croc scene.
+skew_frame = list(convert.IDENTITY)
+skew_frame[0], skew_frame[5], skew_frame[10] = 0.478, 0.311, 0.888
+nomad.send({"type": "group", "link_id": "croc", "name": "croc",
+            "world_matrix": list(convert.IDENTITY)})
+nomad.send(*mesh("skewed", "head", parent_id="croc",
+                 local_matrix=list(convert.IDENTITY),      # identity, scale 1
+                 world_matrix_parent=skew_frame,           # the extra frame
+                 world_matrix=skew_frame))                 # so the world is scaled
+check(wait(lambda: "skewed" in link.meshes), "the skewed node arrives")
+skew_stage = Usd.Stage.CreateInMemory()
+usd.author_scene(skew_stage, link, material_style="preview")
+head_world = UsdGeom.Xformable(
+    skew_stage.GetPrimAtPath("/nomad/croc/head")).ComputeLocalToWorldTransform(0)
+scales = [head_world.GetRow3(i).GetLength() for i in range(3)]
+check(abs(scales[0] - 0.478) < 1e-5 and abs(scales[1] - 0.311) < 1e-5
+      and abs(scales[2] - 0.888) < 1e-5,
+      "the extra frame's non-uniform scale survives: %s" % [round(v, 3) for v in scales])
+
+# when the frame IS the parent, the pair is authoritative: section 3 says prefer
+# it, with world_matrix left as the flattened value for peers without hierarchy
+pair_local = list(convert.IDENTITY)
+pair_local[13] = 5.0
+nomad.send(*mesh("pair", "Pair", parent_id="sp", local_matrix=pair_local,
                  world_matrix_parent=parent_world, world_matrix=child_world))
-check(wait(lambda: "bad" in link.meshes), "the disagreeing child arrives")
+check(wait(lambda: "pair" in link.meshes), "the child arrives")
 fixed = Usd.Stage.CreateInMemory()
 usd.author_scene(fixed, link, material_style="preview")
-bad_world = UsdGeom.Xformable(
-    fixed.GetPrimAtPath("/nomad/Scaled/Disagrees")).ComputeLocalToWorldTransform(0)
-check(abs(bad_world.ExtractTranslation()[1] - 6.0) < 1e-6,
-      "a local_matrix that contradicts world_matrix is derived instead: y=%.3f"
-      % bad_world.ExtractTranslation()[1])
+pair_world = UsdGeom.Xformable(
+    fixed.GetPrimAtPath("/nomad/Scaled/Pair")).ComputeLocalToWorldTransform(0)
+check(abs(pair_world.ExtractTranslation()[1] - 10.0) < 1e-6,
+      "the pair is used when its frame is the parent we authored: y=%.3f, expected 10"
+      % pair_world.ExtractTranslation()[1])
 
 # an instance carries its own placement, not the original's
 link.clear_scene()

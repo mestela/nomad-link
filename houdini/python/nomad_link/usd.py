@@ -173,22 +173,21 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
         world = entry.get("world_matrix", IDENTITY)
         local = world
         if parent_id:
-            # With parent_id set, Nomad sends local_matrix relative to the parent
-            # and world_matrix stays the flattened value (PROTOCOL.md section 3).
-            # Trust the pair only when it actually reproduces that world matrix:
-            # otherwise the parent's own transform gets applied twice, which shows
-            # up as wrong scale down a chain. Deriving from the two world matrices
-            # is self-consistent by construction.
+            # local_matrix is relative to world_matrix_parent, which is NOT always
+            # the parent's world matrix: a skewed transform splits again and the
+            # extra frame belongs between the parent and the node (PROTOCOL.md
+            # section 3). Using the pair under our parent prim then loses whatever
+            # that frame held -- typically a non-uniform scale. So take the pair
+            # only when the frame it is relative to is the parent we authored, and
+            # otherwise derive the local transform from the two world matrices.
+            # USD holds a skewed matrix directly, which is why we advertise `skew`.
             parent_entry = entries[parent_id][1]
             parent_world = parent_entry.get("world_matrix", IDENTITY)
             pair = entry.get("local_matrix")
-            if pair is not None and convert.matrices_close(
-                    convert.multiply(entry.get("world_matrix_parent", parent_world), pair), world):
+            frame = entry.get("world_matrix_parent")
+            if pair is not None and frame is not None and convert.matrices_close(frame, parent_world):
                 local = pair
             else:
-                if pair is not None:
-                    problems.append("%s: local_matrix does not match world_matrix, "
-                                    "deriving it instead" % entry.get("name", link_id))
                 local = convert.compose_local(world, parent_world)
         if kind == "mesh":
             prim = author_mesh(stage, path, entry, scale=scale, matrix_values=local)

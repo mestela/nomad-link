@@ -215,6 +215,12 @@ class Connection:
         pending = bytearray()
         try:
             sock = socket.create_connection((host, port), timeout=5.0)
+            # a scene transfer is many frames; Nagle plus delayed ACK can stall
+            # each one by tens of milliseconds on some hosts
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
             sock.setblocking(False)
             self._socket = sock
             self.status = "Connected"

@@ -192,6 +192,17 @@ def report(lines=40, meshes=12):
     for name, store in (("lights", link.lights), ("cameras", link.cameras)):
         for link_id, entry in store.items():
             print("  %-8s %-24s %s" % (name[:-1], entry.get("name", "?"), link_id))
+    stats = link.stats
+    span = (stats["last"] - stats["first"]) or 0.0
+    print("traffic     : %d messages, %.1f MB in %.1fs%s"
+          % (stats["messages"], stats["bytes"] / 1048576.0, span,
+             " (%.1f MB/s)" % (stats["bytes"] / 1048576.0 / span) if span > 0.01 else ""))
+    # a long gap between pumps means Houdini was busy, not that the link was idle:
+    # that distinguishes a slow network from a starved main thread
+    print("pump        : %d calls, worst gap %.2fs, worst single pump %.2fs"
+          % (stats["pumps"], stats["worst_gap"], stats["worst_pump"]))
+    print("last rebuild: %.2fs (waits %.1fs of quiet before rebuilding again)"
+          % (link.last_author, link._quiet_for()))
     print("recent      :")
     for line in link.log[-lines:]:
         print("  " + line)

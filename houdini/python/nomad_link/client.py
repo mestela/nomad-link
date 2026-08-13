@@ -114,6 +114,10 @@ class Client:
         self.revision = 0         # bumped whenever the cache changes
         self.log = []
         self.verbose = False      # nomad_link.watch(): log every message that arrives
+        self.stats = {"messages": 0, "bytes": 0, "pumps": 0, "worst_pump": 0.0,
+                      "worst_gap": 0.0, "first": 0.0, "last": 0.0}
+        self._last_pump = 0.0
+        self._last_message = 0.0
         self._pending_acks = {}   # request_id -> node path waiting for its mesh_id
         self._requested = set()   # mesh_ids we already asked a mesh_full for
         self._requested_textures = set()
@@ -244,11 +248,14 @@ class Client:
             pass
         self._callback = None
 
-    def describe(self, header):
+    def describe(self, header, binary=b""):
         kind = header.get("type", "?")
         who = header.get("name") or header.get("link_id") or header.get("mesh_id") or ""
         live = " live" if header.get("live_sync") else ""
-        return "<- %-16s %s%s" % (kind, str(who)[:24], live)
+        now = time.time()
+        gap = now - self._last_message if self._last_message else 0.0
+        size = " %.1fMB" % (len(binary) / 1048576.0) if len(binary) > 65536 else ""
+        return "+%6.3fs <- %-15s %-24s%s%s" % (gap, kind, str(who)[:24], size, live)
 
     # A full stage rebuild per message makes a scene transfer quadratic, so hold off
     # while packets are still arriving. Nomad sends a big scene in bursts with real
@@ -282,10 +289,21 @@ class Client:
     def pump(self):
         """Drain the socket queue. Main thread only (event loop or hython loop)."""
         before = self.revision
+        entered = time.time()
+        gap = entered - self._last_pump if self._last_pump else 0.0
+        self._last_pump = entered
+        self.stats["pumps"] += 1
+        self.stats["worst_gap"] = max(self.stats["worst_gap"], gap)
+
         packets = self.connection.poll()
         for header, binary in packets:
             if self.verbose:
-                self.note(self.describe(header))
+                self.note(self.describe(header, binary))
+            self._last_message = time.time()
+            self.stats["messages"] += 1
+            self.stats["bytes"] += len(binary)
+            self.stats["first"] = self.stats["first"] or self._last_message
+            self.stats["last"] = self._last_message
             try:
                 self._handle(header, binary)
             except Exception as exc:  # never let one bad packet kill the callback
@@ -314,6 +332,7 @@ class Client:
         nodes = self._nodes()
         if nodes is not None:
             nodes.refresh_status()
+        self.stats["worst_pump"] = max(self.stats["worst_pump"], time.time() - entered)
 
     def note(self, text):
         self.log.append(text)

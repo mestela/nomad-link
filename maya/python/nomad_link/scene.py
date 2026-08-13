@@ -23,12 +23,13 @@ be far too slow.
 import maya.cmds as cmds
 from maya.api import OpenMaya
 
-from . import convert
+from . import convert, materials
 from .client import client
 
 ROOT = "nomad"
 SCALE = 1.0          # multiplies incoming positions; Maya's unit is the centimetre
 _built = {}          # link_id -> maya transform path
+_shaders = {}        # mesh_id -> (shader, shading group)
 _revision = -1
 
 
@@ -190,6 +191,55 @@ def update_points(path, mesh, scale=SCALE):
         return False
 
 
+# ------------------------------------------------------- lights and cameras
+
+# Nomad light type -> the Maya node that behaves most like it
+LIGHTS = {"POINT": "pointLight", "SUN": "directionalLight", "SPOT": "spotLight",
+          "AREA": "areaLight"}
+
+
+def build_light(light):
+    """Nomad lights aim down -Z with +Y up, as Maya's do, so the matrix transfers."""
+    kind = str(light.get("light_type", "POINT")).upper()
+    if kind == "ENVIRONMENT":
+        return None  # Maya has no native dome light; Arnold or V-Ray supplies one
+    shape = cmds.shadingNode(LIGHTS.get(kind, "pointLight"), asLight=True,
+                             name=valid_name(light.get("name", "light")))
+    transform = cmds.listRelatives(shape, parent=True, fullPath=True)
+    path = transform[0] if transform else shape
+
+    colour = light.get("color")
+    if colour is not None:
+        cmds.setAttr(shape + ".color", float(colour[0]), float(colour[1]), float(colour[2]),
+                     type="double3")
+    # a sun carries Nomad's normalized intensity, everything else its power
+    intensity = light.get("intensity" if kind == "SUN" else "power")
+    if intensity is not None:
+        cmds.setAttr(shape + ".intensity", float(intensity))
+    if kind == "SPOT" and "spot_angle" in light:
+        import math
+        cmds.setAttr(shape + ".coneAngle", math.degrees(float(light["spot_angle"])))
+        if "spot_softness" in light:
+            cmds.setAttr(shape + ".penumbraAngle",
+                         math.degrees(float(light["spot_angle"])) * float(light["spot_softness"]))
+    return path
+
+
+def build_camera(camera):
+    """fov_y is vertical, which is what Maya's verticalFilmAperture describes."""
+    import math
+
+    transform, shape = cmds.camera(name=valid_name(camera.get("name", "camera")))[:2]
+    if camera.get("orthographic"):
+        cmds.setAttr(shape + ".orthographic", True)
+        cmds.setAttr(shape + ".orthographicWidth", float(camera.get("ortho_scale", 1.0)) * SCALE)
+    else:
+        aperture = cmds.getAttr(shape + ".verticalFilmAperture") * 25.4  # inches -> mm
+        fov = math.radians(float(camera.get("fov_y", 50.0)))
+        cmds.setAttr(shape + ".focalLength", (aperture / 2.0) / math.tan(fov / 2.0))
+    return cmds.ls(transform, long=True)[0]
+
+
 # ------------------------------------------------------------------ the scene
 
 def root():
@@ -202,7 +252,12 @@ def clear():
     """Remove everything this bridge built."""
     if cmds.objExists(ROOT):
         cmds.delete(ROOT)
+    for shader, group in _shaders.values():
+        for node in (shader, group):
+            if cmds.objExists(node):
+                cmds.delete(node)
     _built.clear()
+    _shaders.clear()
 
 
 def rebuild(revision=None):
@@ -232,11 +287,36 @@ def rebuild(revision=None):
             parent = _built.get(parent_of.get(mesh_id)) or root_path
             _built[mesh_id] = build_mesh(mesh, parent=parent)
         apply_transform(_built[mesh_id], mesh, link)
+        apply_material(mesh_id, mesh, link)
+
+    for link_id, light in link.lights.items():
+        if link_id in _built:
+            continue
+        path = build_light(light)
+        if path:
+            _built[link_id] = cmds.parent(path, root_path)[0]
+            apply_transform(_built[link_id], light, link)
+    for link_id, camera in link.cameras.items():
+        if link_id in _built:
+            continue
+        _built[link_id] = cmds.parent(build_camera(camera), root_path)[0]
+        apply_transform(_built[link_id], camera, link)
 
     for mesh_id, path in list(_built.items()):
         if mesh_id not in link.meshes and cmds.objExists(path):
             cmds.delete(path)
             _built.pop(mesh_id, None)
+
+
+def apply_material(mesh_id, mesh, link):
+    """One shader per Nomad material; instances share the original's."""
+    key = mesh_id if mesh_id in link.materials else mesh.get("material_source")
+    if key not in link.materials:
+        return
+    if key not in _shaders:
+        _shaders[key] = materials.build(
+            link.materials[key], name=valid_name(mesh["name"]) + "_mat")
+    materials.assign(_shaders[key][1], _built[mesh_id])
 
 
 def apply_transform(path, mesh, link):

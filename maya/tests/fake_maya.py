@@ -175,7 +175,8 @@ class MTimerMessage:
 
 
 SCENE = {"nodes": {}, "meshes": {}, "transforms": {}, "attributes": {},
-         "updates": [], "callbacks": {}, "deleted": [], "shading": []}
+         "updates": [], "callbacks": {}, "deleted": [], "shading": [],
+         "shaders": {}, "connections": [], "assignments": []}
 
 
 def reset():
@@ -210,8 +211,8 @@ def delete(name):
     SCENE["meshes"].pop(name, None)
 
 
-def setAttr(plug, value, **kwargs):
-    SCENE["attributes"][plug] = value
+def setAttr(plug, *values, **kwargs):
+    SCENE["attributes"][plug] = values[0] if len(values) == 1 else tuple(values)
 
 
 def internalVar(**kwargs):
@@ -219,12 +220,41 @@ def internalVar(**kwargs):
 
 
 def listRelatives(path, **kwargs):
+    if kwargs.get("parent"):
+        return [path.replace("Shape", "")]
     return [path + "Shape"]
 
 
-def sets(shapes, **kwargs):
+def sets(shapes=None, **kwargs):
+    if kwargs.get("empty"):
+        name = kwargs.get("name", "shadingGroup")
+        SCENE["nodes"][name] = {"type": "shadingGroup"}
+        return name
     SCENE["shading"].extend(shapes if isinstance(shapes, list) else [shapes])
+    SCENE["assignments"].append((tuple(shapes) if isinstance(shapes, list) else shapes,
+                                 kwargs.get("forceElement")))
     return "initialShadingGroup"
+
+
+def shadingNode(kind, **kwargs):
+    name = kwargs.get("name") or "%s%d" % (kind, len(SCENE["nodes"]))
+    SCENE["nodes"][name] = {"type": kind}
+    SCENE["shaders"][name] = {"type": kind}
+    return name
+
+
+def connectAttr(source, destination, **kwargs):
+    SCENE["connections"].append((source, destination))
+
+
+def getAttr(plug, **kwargs):
+    return SCENE["attributes"].get(plug, 0.9448818897637796)  # Maya's default aperture
+
+
+def camera(**kwargs):
+    name = kwargs.get("name", "camera1")
+    SCENE["nodes"][name] = {"type": "camera"}
+    return [name, name + "Shape"]
 
 
 def window(*args, **kwargs):
@@ -268,7 +298,8 @@ def install():
     maya = types.ModuleType("maya")
     cmds = types.ModuleType("maya.cmds")
     for name in ("objExists", "createNode", "parent", "ls", "delete", "setAttr",
-                 "internalVar", "listRelatives", "sets", "window", "deleteUI",
+                 "internalVar", "listRelatives", "sets", "shadingNode",
+                 "connectAttr", "getAttr", "camera", "window", "deleteUI",
                  "columnLayout", "text",
                  "textFieldGrp", "button", "separator", "showWindow", "scriptJob"):
         setattr(cmds, name, globals()[name])

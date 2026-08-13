@@ -69,8 +69,29 @@ the new one. If something behaves like an older version, look for strays in
 | vertex colour and opacity | a `nomad` colour set, alpha included |
 | sculpt layers | applied, so a posed character arrives posed |
 | live strokes | patched onto the existing mesh, not rebuilt |
+| materials | `standardSurface`, one per Nomad material, shared by instances |
+| lights | point, directional, spot and area |
+| cameras | with `fov_y` as a focal length |
 
-Not yet: materials, lights, cameras, textures, and sending anything back.
+Not yet: textures, the environment (Maya has no native dome light), and sending
+anything back to Nomad.
+
+### Materials
+
+`standardSurface` is Autodesk's version of the model OpenPBR describes, so the
+mapping is the Houdini bridge's with the names changed. The attribute names sit
+in a table per surface type in `materials.py`, so another renderer -- VRayMtl,
+aiStandardSurface -- is a table and a node name rather than a rewrite.
+
+Two things worth knowing:
+
+- **Vertex paint displays but does not render.** The colour set shows in
+  Viewport 2.0; driving a shader from it needs a reader node, and there is no
+  universal one (`aiUserDataColor` for Arnold, `VRayVertexColors` for V-Ray).
+  That arrives with the renderer-specific tables.
+- Nomad's `subsurface_color` is the colour of light bleeding through, not a
+  scattering albedo. It drives the scatter radius per channel; the albedo
+  follows the surface colour. Using it as an albedo turns skin into red wax.
 
 ## Conventions
 

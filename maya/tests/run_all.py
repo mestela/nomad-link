@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODULES = ["test_link.py", "test_scene.py"]
+MODULES = ["test_link.py", "test_scene.py", "test_materials.py"]
 
 environment = dict(os.environ)
 paths = [os.path.join(HERE, "..", "python")]

@@ -137,25 +137,44 @@ def build(block, name="nomad_material", kind=None, painted=()):
     cmds.connectAttr(shader + ".outColor", group + ".surfaceShader", force=True)
     apply_block(shader, block, kind)
     for key in painted or ():
-        wire_painted(shader, table, key)
+        wire_painted(shader, table, key, tint=block.get("color"))
     return shader, group
 
 
-def wire_painted(shader, table, key):
-    """Drive one shader input from the colour set carrying that painted channel."""
+def wire_painted(shader, table, key, tint=None):
+    """Drive one shader input from the colour set carrying that painted channel.
+
+    Colour multiplies the material's own (PROTOCOL.md section 10), so a tinted
+    object with white paint keeps its tint -- which is how a filled Nomad
+    primitive arrives. The scalar channels replace it, as they do in Nomad.
+    """
     for painted_key, colour_set, target, component in PAINTED_INPUTS:
         if painted_key != key or target not in table:
             continue
         reader = colour_reader(colour_set)
         if not reader:
             return None
+        source = "%s.%s" % (reader, component)
+        if painted_key == "color" and tint is not None and list(tint[:3]) != [1.0, 1.0, 1.0]:
+            source = multiply_colour(reader, tint)
         try:
-            cmds.connectAttr("%s.%s" % (reader, component),
-                             "%s.%s" % (shader, table[target]), force=True)
+            cmds.connectAttr(source, "%s.%s" % (shader, table[target]), force=True)
         except Exception:
             return None
         return reader
     return None
+
+
+def multiply_colour(reader, tint):
+    """reader x tint, so the material colour survives the paint on top of it."""
+    try:
+        node = cmds.shadingNode("multiplyDivide", asUtility=True, name="nomad_tint")
+        cmds.connectAttr(reader + ".outColor", node + ".input1", force=True)
+        cmds.setAttr(node + ".input2", float(tint[0]), float(tint[1]), float(tint[2]),
+                     type="double3")
+        return node + ".output"
+    except Exception:
+        return reader + ".outColor"
 
 
 def apply_block(shader, block, kind=None):

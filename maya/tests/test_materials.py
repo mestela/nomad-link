@@ -186,4 +186,41 @@ materials.SURFACE = "standardSurface"
 check(materials.preferred_surface() == "standardSurface", "and the choice can be pinned")
 materials.SURFACE = "auto"
 
+# ---- a tinted object with white paint keeps its tint: Nomad multiplies them,
+# and a filled primitive is exactly that case
+SCENE["plugins"] = ["mtoa"]   # the paint reader needs a renderer to exist at all
+scene._shaders.clear()
+SCENE["connections"][:] = []
+SCENE["shaders"].clear()
+tinted = mesh("m5", "Primitive")
+tinted["color"] = numpy.ones((3, 3), "f4")          # paint is white
+link._store(tinted)
+link.materials["m5"] = {"color": [0.1, 0.4, 0.9]}   # the colour lives here
+scene.rebuild(link.revision + 5)
+multiplies = [name for name, node in SCENE["shaders"].items()
+              if node["type"] == "multiplyDivide"]
+check(multiplies, "a non-white material colour is multiplied in: %s" % list(SCENE["shaders"]))
+check(SCENE["attributes"]["%s.input2" % multiplies[0]] == (0.1, 0.4, 0.9),
+      "by the material's own colour")
+check(any(dest.endswith("baseColor") and source.startswith(multiplies[0])
+          for source, dest in SCENE["connections"]),
+      "and the product drives base colour, not the paint alone")
+
+# white tint needs no node. Every mesh is rebuilt each pass, so the tinted one
+# has to go first or its multiply is still in the scene.
+for stale in ("m5", "m3", "m4"):
+    link.meshes.pop(stale, None)
+    link.materials.pop(stale, None)
+    if stale in link.order:
+        link.order.remove(stale)
+scene._shaders.clear()
+SCENE["shaders"].clear()
+plainer = mesh("m6", "Plain2")
+plainer["color"] = numpy.ones((3, 3), "f4")
+link._store(plainer)
+link.materials["m6"] = {"color": [1.0, 1.0, 1.0]}
+scene.rebuild(link.revision + 6)
+check(not [n for n, node in SCENE["shaders"].items() if node["type"] == "multiplyDivide"],
+      "a white material colour multiplies by one, so no node is made")
+
 print("\nall good")

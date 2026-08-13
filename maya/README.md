@@ -142,6 +142,33 @@ building the Houdini bridge:
 - **Anything sent mid-transfer**, which makes Nomad restart from the beginning.
   This bridge holds its own requests until the link is quiet.
 
+## Known gaps
+
+- **Transfers stall.** Not specific to Maya -- see Transfers above. Beyond the
+  two causes listed there, transfers have been seen to pause and resume for
+  reasons not yet understood, so a scene can take longer than the data warrants.
+- **Textures are not imported.** Nomad sends the pixels (PROTOCOL.md 10.2) and
+  the client caches them to disk; nothing builds file nodes from them yet.
+- **No environment.** Nomad names its HDRI rather than sending it, and Maya has
+  no native dome light, so the environment is skipped entirely.
+- **Nothing goes back to Nomad.** This is an importer. The Houdini bridge can
+  send geometry; this cannot.
+- **Scale is unresolved.** `SCALE` defaults to 1.0, making a two-unit character
+  two centimetres tall. Arnold's subsurface radius and physical lights both
+  assume centimetres, so `nomad_link.scene.SCALE = 100.0` may behave better --
+  and the subsurface weight below was calibrated at 1.0, so it would want
+  revisiting.
+- **Subsurface weight is by eye.** `materials.SUBSURFACE_WEIGHT` is 0.05,
+  matched against an Arnold render. Karma wants 0.5 for the same material.
+- **Mask and density ride along unconnected.** They arrive as colour sets
+  (`nomad_mask`, `nomad_density`) but nothing drives a shader from them.
+- **Vertex paint does not preview.** The readers are renderer nodes and Viewport
+  2.0 does not evaluate them; paint appears in a render. Display the colour set
+  directly to see it in the viewport.
+- **V-Ray is untested.** There is a table entry for `VRayVertexColors`, written
+  from documentation rather than from a run.
+- **Sculpt layers are applied at Nomad's weights**, not left dial-able.
+
 ## Tests
 
 ```

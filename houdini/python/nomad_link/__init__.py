@@ -156,7 +156,7 @@ def ping(seconds=None):
     _client_module = _module()
     if seconds is None:
         if not _client_module.PING_INTERVAL:
-            return "off (pings stall Nomad's sender mid-transfer)"
+            return "off (no reference client sends one)"
         return "every %.2fs (%.2fs while a transfer is expected)" % (
             _client_module.PING_INTERVAL, _client_module.PING_INTERVAL_RECEIVING)
     _client_module.PING_INTERVAL = float(seconds)
@@ -196,8 +196,13 @@ def report(lines=40, meshes=12):
     print("status      : %s - %s" % (link.status, link.message))
     print("nomad       : %s at %s:%s" % (link.nomad_version, link.host, link.port))
     print("nomad can   : %s" % ", ".join(sorted(link.peer_capabilities)))
-    config = {key: value for key, value in link.session_config.items() if key != "type"}
+    config = {key: value for key, value in link.session_config.items()
+              if key not in ("type", "peers", "source_name")}
     print("session     : %s" % config)
+    peers = link.session_config.get("peers") or []
+    # another client shares Nomad's sender: a stalled one can hold up everybody,
+    # and a dropped session can linger in this list
+    print("other peers : %s" % (", ".join(peers) if peers else "none"))
     print("cached      : %d meshes, %d materials, %d lights, %d cameras, %d textures"
           % (len(link.meshes), len(link.materials), len(link.lights),
              len(link.cameras), len(link.textures)))

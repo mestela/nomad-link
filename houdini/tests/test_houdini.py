@@ -94,7 +94,9 @@ check(wait(link, lambda: link.connected and link.nomad_version == "2.0"),
 # ---------------------------------------------------------------- Nomad -> Houdini
 nomad.send(*nomad_quad_and_tri())
 check(wait(link, lambda: "m1" in link.meshes), "mesh_full lands in the cache")
-check(node_in.evalParm("revision") > 0, "the In SOP's revision parm was bumped")
+# the refresh is coalesced, so it lands a pump or two after the data does
+check(wait(link, lambda: node_in.evalParm("revision") > 0),
+      "the In SOP's revision parm was bumped")
 
 geo = node_in.geometry()
 check(len(geo.points()) == 5, "In built 5 points, got %d" % len(geo.points()))
@@ -123,9 +125,9 @@ nomad.send({"type": "mesh_delta", "mesh_id": "m1", "count": 1, "vertex_count": 5
             "binary_size": 16, "live_sync": True},
            numpy.array([0], "<u4").tobytes() + moved.tobytes())
 check(wait(link, lambda: link.revision > revision), "mesh_delta arrives")
-position = node_in.geometry().points()[0].position()
-check(abs(position[1] - 17.0) < 1e-4,
-      "the In SOP recooked from the delta (y=%.3f, expected 17)" % position[1])
+check(wait(link, lambda: abs(node_in.geometry().points()[0].position()[1] - 17.0) < 1e-4),
+      "the In SOP recooked from the delta (y=%.3f, expected 17)"
+      % node_in.geometry().points()[0].position()[1])
 
 # ---------------------------------------------------------------- Houdini -> Nomad
 box = container.createNode("box")
@@ -264,7 +266,7 @@ revision = lop.evalParm("revision")
 nomad.send({"type": "light", "link_id": "l2", "name": "Rim", "light_type": "SUN",
             "intensity": 2.0, "world_matrix": list(convert.IDENTITY)})
 check(wait(link, lambda: lop.evalParm("revision") != revision), "the LOP's revision is bumped")
-check(bool(UsdLux.DistantLight(lop.stage().GetPrimAtPath("/nomad/Rim"))),
+check(wait(link, lambda: bool(UsdLux.DistantLight(lop.stage().GetPrimAtPath("/nomad/Rim")))),
       "the LOP recooked and the new light is on the stage")
 
 # Clear Cache: the cache is a session singleton, so a node cannot own its reset

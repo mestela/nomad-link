@@ -113,6 +113,44 @@ check(wait(lambda: "p1" not in link.meshes), "deleting the parent works")
 check("c1" not in link.meshes and "c2" not in link.meshes,
       "and takes the whole branch with it (0.11.37)")
 
+# transforms down a chain: a scaled parent must not scale the child twice
+link.clear_scene()
+parent_world = list(convert.IDENTITY)
+parent_world[0] = parent_world[5] = parent_world[10] = 2.0   # uniform scale 2
+child_local = list(convert.IDENTITY)
+child_local[13] = 3.0                                        # 3 up, in parent space
+child_world = convert.multiply(parent_world, child_local)     # so 6 up in world
+nomad.send({"type": "group", "link_id": "sp", "name": "Scaled",
+            "world_matrix": parent_world})
+nomad.send(*mesh("sc", "Under", parent_id="sp", local_matrix=child_local,
+                 world_matrix_parent=parent_world, world_matrix=child_world))
+check(wait(lambda: "sc" in link.meshes), "the scaled branch arrives")
+chain = Usd.Stage.CreateInMemory()
+usd.author_scene(chain, link, material_style="preview")
+child = chain.GetPrimAtPath("/nomad/Scaled/Under")
+check(bool(child), "the child is under the scaled parent")
+world_xform = UsdGeom.Xformable(child).ComputeLocalToWorldTransform(0)
+check(abs(world_xform.ExtractTranslation()[1] - 6.0) < 1e-6,
+      "the child lands where Nomad says it does: y=%.3f, expected 6"
+      % world_xform.ExtractTranslation()[1])
+check(abs(world_xform.GetRow3(0).GetLength() - 2.0) < 1e-6,
+      "and inherits the parent's scale exactly once: %.3f"
+      % world_xform.GetRow3(0).GetLength())
+
+# a local_matrix that disagrees with world_matrix must not be trusted
+bad_local = list(convert.IDENTITY)
+bad_local[13] = 99.0
+nomad.send(*mesh("bad", "Disagrees", parent_id="sp", local_matrix=bad_local,
+                 world_matrix_parent=parent_world, world_matrix=child_world))
+check(wait(lambda: "bad" in link.meshes), "the disagreeing child arrives")
+fixed = Usd.Stage.CreateInMemory()
+usd.author_scene(fixed, link, material_style="preview")
+bad_world = UsdGeom.Xformable(
+    fixed.GetPrimAtPath("/nomad/Scaled/Disagrees")).ComputeLocalToWorldTransform(0)
+check(abs(bad_world.ExtractTranslation()[1] - 6.0) < 1e-6,
+      "a local_matrix that contradicts world_matrix is derived instead: y=%.3f"
+      % bad_world.ExtractTranslation()[1])
+
 link.disconnect()
 os.remove(client_module._token_path())
 print("\nall good")

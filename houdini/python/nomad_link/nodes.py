@@ -276,7 +276,7 @@ def cook_import(lop):
     link = client()
     # surface per-object failures through report() rather than only stdout
     usd.report_problems = lambda problems: [
-        link.note("could not author %s" % problem) for problem in problems]
+        link.note("authoring: %s" % problem) for problem in problems]
 
     _eval(lop, "revision")  # cook dependency: new Nomad data bumps this
     usd.author_scene(

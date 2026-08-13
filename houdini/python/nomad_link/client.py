@@ -120,6 +120,7 @@ class Client:
         self._pending_states = {}  # object_state that arrived before its object
         self._callback = None
         self._last_ping = 0.0
+        self._dirty_at = 0.0      # coalesce recooks: a transfer is hundreds of messages
 
     # ------------------------------------------------------------- lifecycle
 
@@ -155,6 +156,7 @@ class Client:
     def disconnect(self):
         self.connection.disconnect()
         self._remove_pump()
+        self._dirty_at = 0.0
         self.peer_capabilities = set()
         self.nomad_version = ""
         self.message = "Disconnected"
@@ -241,10 +243,16 @@ class Client:
         live = " live" if header.get("live_sync") else ""
         return "<- %-16s %s%s" % (kind, str(who)[:24], live)
 
+    # a full stage rebuild per message makes a scene transfer quadratic, so hold
+    # off while packets are still arriving -- but never for longer than this
+    COALESCE = 0.2
+    COALESCE_MAX = 2.0
+
     def pump(self):
         """Drain the socket queue. Main thread only (event loop or hython loop)."""
         before = self.revision
-        for header, binary in self.connection.poll():
+        packets = self.connection.poll()
+        for header, binary in packets:
             if self.verbose:
                 self.note(self.describe(header))
             try:
@@ -256,7 +264,12 @@ class Client:
         if self.connected and time.time() - self._last_ping > PING_INTERVAL:
             self._last_ping = time.time()
             self.send({"type": "ping"})
+        now = time.time()
         if self.revision != before:
+            self._dirty_at = self._dirty_at or now  # first change of this burst
+        if self._dirty_at and (not packets or now - self._dirty_at > self.COALESCE_MAX):
+            # the burst has gone quiet (or run long enough): rebuild once
+            self._dirty_at = 0.0
             self._dirty_nodes()
 
     def note(self, text):

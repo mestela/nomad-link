@@ -346,6 +346,20 @@ def compose_local(child, parent):
     return list(local.flatten(order="F"))
 
 
+def multiply(parent, local):
+    """world = parent x local, in Nomad's column-major column-vector convention."""
+    parent_m = numpy.array(parent, numpy.float64).reshape(4, 4, order="F")
+    local_m = numpy.array(local, numpy.float64).reshape(4, 4, order="F")
+    return list((parent_m @ local_m).flatten(order="F"))
+
+
+def matrices_close(a, b, tolerance=1e-4):
+    if a is None or b is None:
+        return False
+    return bool(numpy.allclose(numpy.array(a, numpy.float64),
+                               numpy.array(b, numpy.float64), atol=tolerance))
+
+
 def transform_points(positions, matrix, inverse=False):
     """Apply a Nomad column-major world_matrix (or its inverse) to (n, 3) points."""
     m = numpy.array(matrix, numpy.float64).reshape(4, 4, order="F")

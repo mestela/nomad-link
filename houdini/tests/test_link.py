@@ -86,8 +86,8 @@ check(link.meshes["cube2"]["world_matrix"][13] == 3.0, "instance keeps its own t
 
 nomad.send({"type": "mesh_instance", "mesh_id": "cube3", "geometry_id": "unknown",
             "name": "Orphan", "world_matrix": list(convert.IDENTITY)})
-check(wait(lambda: any(h.get("type") == "request_mesh" for h, _ in nomad.received)),
-      "unknown geometry triggers request_mesh (PROTOCOL.md section 8)")
+check(wait(lambda: any(h.get("type") == "request_mesh" for h, _ in nomad.received), 5.0),
+      "unknown geometry triggers request_mesh once quiet (PROTOCOL.md section 8)")
 
 nomad.send({"type": "object_state", "link_id": "cube1", "name": "Renamed", "visible": True})
 check(wait(lambda: link.meshes["cube1"]["name"] == "Renamed"), "object_state renames")
@@ -111,8 +111,10 @@ nomad.send({"type": "material", "mesh_id": "cube1", "live_sync": False, "materia
 }})
 check(wait(lambda: "cube1" in link.materials), "material lands in the cache")
 check(link.materials["cube1"]["roughness"] == 0.4, "material values stored")
-check(wait(lambda: any(h.get("type") == "request_texture" for h, _ in nomad.received)),
-      "an unknown texture_id is requested (section 10.2)")
+# the request is deferred until the transfer is quiet: anything sent mid-transfer
+# stalls Nomad's sender
+check(wait(lambda: any(h.get("type") == "request_texture" for h, _ in nomad.received), 5.0),
+      "an unknown texture_id is requested once the link goes quiet (section 10.2)")
 
 nomad.send({"type": "texture", "texture_id": "tex1", "name": "skin.png", "binary_size": 4},
            b"\x89PNG")

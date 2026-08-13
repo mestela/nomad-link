@@ -133,6 +133,7 @@ class Client:
         self.last_author = 0.0    # how long the last rebuild took, to pace the next
         self.receiving = False
         self._expect_until = 0.0
+        self._deferred = []       # requests held until the transfer goes quiet
 
     # ------------------------------------------------------------- lifecycle
 
@@ -191,6 +192,7 @@ class Client:
         del self.order[:]
         self._requested.clear()
         self._pending_states.clear()
+        del self._deferred[:]
         self._touch()
 
     def clear(self):
@@ -345,6 +347,7 @@ class Client:
             self._dirty_nodes()
             self.last_author = time.time() - started
         # the status field is cheap and does not dirty a cook, so it can keep up
+        self._flush_deferred(now, quiet)
         nodes = self._nodes()
         if nodes is not None:
             nodes.refresh_status()
@@ -497,7 +500,27 @@ class Client:
         if texture_id in self._requested_textures:
             return
         self._requested_textures.add(texture_id)
-        self.send({"type": "request_texture", "texture_id": texture_id})
+        self.defer({"type": "request_texture", "texture_id": texture_id})
+
+    def defer(self, header):
+        """Hold a request until the transfer is quiet.
+
+        Anything we send mid-transfer stalls Nomad's sender: a keepalive did it,
+        and a second request_scene restarts the transfer and then stalls it after
+        one object. Texture and mesh requests arrive while a scene is still
+        streaming, so they wait their turn.
+        """
+        self._deferred.append(header)
+
+    DEFER_QUIET = 1.5  # seconds of silence before it is safe to ask for something
+
+    def _flush_deferred(self, now, quiet):
+        if not self._deferred or not self.connected or self.receiving:
+            return
+        if quiet < self.DEFER_QUIET:
+            return
+        self.send(self._deferred.pop(0))
+        self._quiet_since = now  # one per quiet window, so the reply lands first
 
     def _store_texture(self, header, binary):
         """Blobs are immutable per id; cache them on disk so USD can reference them."""
@@ -581,7 +604,8 @@ class Client:
     def _recover(self, mesh_id):
         if mesh_id and mesh_id not in self._requested:
             self._requested.add(mesh_id)
-            self.request("request_mesh", mesh_id)
+            self.defer({"type": "request_mesh", "request_id": uuid.uuid4().hex,
+                        "link_id": mesh_id})
 
     # ----------------------------------------------------------- outgoing geo
 

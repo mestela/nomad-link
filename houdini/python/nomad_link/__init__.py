@@ -252,6 +252,7 @@ def report(lines=40, meshes=12):
           % (stats["pumps"], stats["worst_gap"], stats["worst_pump"]))
     print("last rebuild: %.2fs (waits %.1fs of quiet before rebuilding again)"
           % (link.last_author, link._quiet_for()))
+    print("keepalive   : %s" % ping())
     print("recent      :")
     for line in link.log[-lines:]:
         print("  " + line)

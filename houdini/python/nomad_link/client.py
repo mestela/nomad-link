@@ -15,10 +15,12 @@ from . import convert, transport
 PROTOCOL = 1
 DEFAULT_PORT = 48312
 CLIENT_NAME = "Houdini"
-PING_INTERVAL = 10.0
-# Nomad has been seen going quiet mid-transfer and resuming the moment a packet
-# arrives from us, so keep the conversation going while a scene is in flight
-PING_INTERVAL_RECEIVING = 0.25
+# Keepalive OFF by default. The protocol offers ping/pong (section 4) but no
+# reference client uses it, and sending pings during a scene transfer stalls
+# Nomad's sender: a 400-object scene that arrives in under a second without them
+# crawled to a handful of objects with them. nomad_link.ping(n) turns it back on.
+PING_INTERVAL = 0.0
+PING_INTERVAL_RECEIVING = 0.0
 
 # honest hello: we receive geometry, object state and the scene objects that the
 # LOP side authors on a stage, and we send mesh_full. We do not advertise
@@ -324,7 +326,7 @@ class Client:
             self._expect_until = max(self._expect_until, entered + self.EXPECT_WINDOW)
         expecting = self.receiving or entered < self._expect_until
         interval = PING_INTERVAL_RECEIVING if expecting else PING_INTERVAL
-        if self.connected and time.time() - self._last_ping > interval:
+        if interval > 0 and self.connected and time.time() - self._last_ping > interval:
             self._last_ping = time.time()
             self.send({"type": "ping"})
         now = time.time()

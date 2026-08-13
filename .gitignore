@@ -4,3 +4,4 @@ nomad-link-bridges.zip
 nomad-link-houdini.zip
 houdini/otls/backup/
 houdini/tests/.test_tokens.json
+maya/tests/.test_tokens.json

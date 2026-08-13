@@ -323,7 +323,10 @@ class Client:
             # applied in array order as one step: a re-parent has to land before
             # the delete that would otherwise orphan it
             for message in header.get("messages", ()):
-                self._handle(message, b"")
+                try:
+                    self._handle(message, b"")
+                except Exception as exc:  # one bad entry must not drop the rest
+                    self.note("error in scene_batch %s: %s" % (message.get("type"), exc))
         elif kind == "material":
             self._store_material(header.get("mesh_id", ""), header.get("material", {}))
         elif kind in ("light", "camera_object"):

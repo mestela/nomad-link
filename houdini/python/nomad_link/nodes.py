@@ -273,6 +273,11 @@ def cook_import(lop):
     """Author the whole Nomad scene -- meshes, materials, lights, cameras -- on a stage."""
     from . import usd  # only the LOP side needs pxr
 
+    link = client()
+    # surface per-object failures through report() rather than only stdout
+    usd.report_problems = lambda problems: [
+        link.note("could not author %s" % problem) for problem in problems]
+
     _eval(lop, "revision")  # cook dependency: new Nomad data bumps this
     usd.author_scene(
         lop.editableStage(),

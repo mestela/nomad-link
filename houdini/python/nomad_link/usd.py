@@ -153,42 +153,60 @@ def author_scene(stage, cache, *, scale=1.0, import_materials=True, import_light
             order[link_id]))
 
     names = {"": taken}
+    problems = []
 
     def author_branch(parent_id, parent_path):
         for link_id in children.get(parent_id, ()):
-            kind, entry = entries[link_id]
-            label = entry.get("name") or kind
-            path = unique_child(parent_path, label, names.setdefault(parent_id, set()))
-            world = entry.get("world_matrix", IDENTITY)
-            local = world
-            if parent_id:
-                # with parent_id set, Nomad sends local_matrix relative to the
-                # parent and world_matrix stays the flattened value for peers
-                # without hierarchy: prefer the pair (PROTOCOL.md section 3)
-                parent_entry = entries[parent_id][1]
-                local = entry.get("local_matrix") or convert.compose_local(
-                    world, parent_entry.get("world_matrix", IDENTITY))
-            if kind == "mesh":
-                prim = author_mesh(stage, path, entry, scale=scale, matrix_values=local)
-                material = materials.get(keys.get(link_id, link_id))
-                if material is not None:
-                    UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
-                    UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)
-            elif kind == "light":
-                author_light(stage, path, entry, scale=scale, light_scale=light_scale,
-                             matrix_values=local)
-            elif kind == "camera":
-                author_camera(stage, path, entry, scale=scale, matrix_values=local)
-            else:
-                author_group(stage, path, entry, scale=scale, matrix_values=local)
+            try:
+                path = author_one(parent_id, parent_path, link_id)
+            except Exception as exc:  # one bad object must not truncate the scene
+                problems.append("%s: %s" % (entries[link_id][1].get("name", link_id), exc))
+                continue
             written.append(path)
             author_branch(link_id, path)
 
+    def author_one(parent_id, parent_path, link_id):
+        """Author one node and return its prim path."""
+        kind, entry = entries[link_id]
+        label = entry.get("name") or kind
+        path = unique_child(parent_path, label, names.setdefault(parent_id, set()))
+        world = entry.get("world_matrix", IDENTITY)
+        local = world
+        if parent_id:
+            # with parent_id set, Nomad sends local_matrix relative to the
+            # parent and world_matrix stays the flattened value for peers
+            # without hierarchy: prefer the pair (PROTOCOL.md section 3)
+            parent_entry = entries[parent_id][1]
+            local = entry.get("local_matrix") or convert.compose_local(
+                world, parent_entry.get("world_matrix", IDENTITY))
+        if kind == "mesh":
+            prim = author_mesh(stage, path, entry, scale=scale, matrix_values=local)
+            material = materials.get(keys.get(link_id, link_id))
+            if material is not None:
+                UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
+                UsdShade.MaterialBindingAPI(prim.GetPrim()).Bind(material)
+        elif kind == "light":
+            author_light(stage, path, entry, scale=scale, light_scale=light_scale,
+                         matrix_values=local)
+        elif kind == "camera":
+            author_camera(stage, path, entry, scale=scale, matrix_values=local)
+        else:
+            author_group(stage, path, entry, scale=scale, matrix_values=local)
+        return path
+
     author_branch("", ROOT)
+    if problems:
+        report_problems(problems)
     return written
 
 
 # ----------------------------------------------------------------------- mesh
+
+def report_problems(problems):
+    """Objects that failed to author. Overridden by the node side so they surface."""
+    print("nomad_link: %d object(s) could not be authored: %s"
+          % (len(problems), "; ".join(problems[:5])))
+
 
 def material_keys(cache):
     """mesh_id -> the mesh_id whose material block it should use.

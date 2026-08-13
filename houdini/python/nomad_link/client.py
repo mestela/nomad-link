@@ -130,6 +130,7 @@ class Client:
         self._dirty_at = 0.0      # coalesce recooks: a transfer is hundreds of messages
         self.last_author = 0.0    # how long the last rebuild took, to pace the next
         self.receiving = False
+        self._expect_until = 0.0
 
     # ------------------------------------------------------------- lifecycle
 
@@ -223,7 +224,11 @@ class Client:
             key for key, value in header.items() if key.startswith("sync_") and value))
         return self.send(header)
 
+    EXPECT_WINDOW = 20.0  # keep nudging this long after the last sign of life
+
     def request(self, kind, link_id=""):
+        if kind in ("request_scene", "request_selection", "request_mesh"):
+            self._expect_until = time.time() + self.EXPECT_WINDOW
         header = {"type": kind, "request_id": uuid.uuid4().hex}
         if link_id:
             header["link_id"] = link_id
@@ -313,7 +318,12 @@ class Client:
                 self.note("error handling %s: %s" % (header.get("type"), exc))
         if self.connection.status == "Error" and self.message != self.connection.error:
             self.message = self.connection.error or "Connection lost"
-        interval = PING_INTERVAL_RECEIVING if self.receiving else PING_INTERVAL
+        # `receiving` goes false as soon as we rebuild, which is exactly when we are
+        # waiting for the rest: nudge for a while after the last message instead
+        if packets:
+            self._expect_until = max(self._expect_until, entered + self.EXPECT_WINDOW)
+        expecting = self.receiving or entered < self._expect_until
+        interval = PING_INTERVAL_RECEIVING if expecting else PING_INTERVAL
         if self.connected and time.time() - self._last_ping > interval:
             self._last_ping = time.time()
             self.send({"type": "ping"})

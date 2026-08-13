@@ -112,6 +112,11 @@ DEFAULT_CAPABILITIES = [
 
 class Connection:
     def __init__(self, client_name, capabilities=None):
+        # byte-level counters: a frame only appears once it is complete, so these
+        # are the only way to tell a slow sender from a silent one
+        self.rx_bytes = 0
+        self.rx_last = 0.0
+        self.rx_recent = []   # (time, bytes) for the last few seconds
         self.client_name = client_name
         self.capabilities = list(DEFAULT_CAPABILITIES if capabilities is None else capabilities)
         self.incoming = queue.Queue()
@@ -246,6 +251,11 @@ class Connection:
                     data = sock.recv(1 << 18)
                     if not data:
                         raise ConnectionError("Nomad closed the connection")
+                    now = time.monotonic()
+                    self.rx_bytes += len(data)
+                    self.rx_last = now
+                    self.rx_recent.append((now, len(data)))
+                    del self.rx_recent[:-400]
                     buffer.extend(data)
                     for packet in self._pop_frames(buffer):
                         self.incoming.put(packet)

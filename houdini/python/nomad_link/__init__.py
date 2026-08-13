@@ -199,6 +199,14 @@ def report(lines=40, meshes=12):
              " (%.1f MB/s)" % (stats["bytes"] / 1048576.0 / span) if span > 0.01 else ""))
     # a long gap between pumps means Houdini was busy, not that the link was idle:
     # that distinguishes a slow network from a starved main thread
+    import time as _time
+    connection = link.connection
+    recent = getattr(connection, "rx_recent", [])
+    window = [n for when, n in recent if _time.monotonic() - when < 5.0]
+    since = _time.monotonic() - connection.rx_last if getattr(connection, "rx_last", 0) else -1
+    print("socket      : %.1f MB read, %.0f KB in the last 5s, last byte %s"
+          % (getattr(connection, "rx_bytes", 0) / 1048576.0, sum(window) / 1024.0,
+             ("%.1fs ago" % since) if since >= 0 else "never"))
     print("pump        : %d calls, worst gap %.2fs, worst single pump %.2fs"
           % (stats["pumps"], stats["worst_gap"], stats["worst_pump"]))
     print("last rebuild: %.2fs (waits %.1fs of quiet before rebuilding again)"

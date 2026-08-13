@@ -15,10 +15,11 @@ from . import convert, transport
 PROTOCOL = 1
 DEFAULT_PORT = 48312
 CLIENT_NAME = "Houdini"
-# Keepalive OFF by default. The protocol offers ping/pong (section 4) but no
-# reference client uses it, and sending pings during a scene transfer stalls
-# Nomad's sender: a 400-object scene that arrives in under a second without them
-# crawled to a handful of objects with them. nomad_link.ping(n) turns it back on.
+# Keepalive OFF by default, because no reference client sends one -- not the
+# Blender extension, not any example. It was once thought to stall transfers;
+# measurement later showed the real cause was Nomad pausing its Link sender
+# while the app is in the background, so that finding is unproven either way.
+# There is no need for a keepalive, so there is no reason to reintroduce one.
 PING_INTERVAL = 0.0
 PING_INTERVAL_RECEIVING = 0.0
 
@@ -177,6 +178,10 @@ class Client:
 
     def send(self, header, binary=b""):
         return self.connection.send(header, binary)
+
+    def quiet_for(self):
+        """Seconds since the last message arrived."""
+        return time.time() - (self._last_message or time.time())
 
     @property
     def object_count(self):
@@ -505,10 +510,9 @@ class Client:
     def defer(self, header):
         """Hold a request until the transfer is quiet.
 
-        Anything we send mid-transfer stalls Nomad's sender: a keepalive did it,
-        and a second request_scene restarts the transfer and then stalls it after
-        one object. Texture and mesh requests arrive while a scene is still
-        streaming, so they wait their turn.
+        A second request_scene restarts a transfer from the beginning, so asking
+        for a texture or a missing mesh while a scene is still streaming risks
+        interrupting it. They wait their turn.
         """
         self._deferred.append(header)
 

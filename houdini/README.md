@@ -85,6 +85,15 @@ one undo step in Nomad. The capabilities in the `hello` are honest about this.
 
 ## Troubleshooting
 
+**A transfer stops part-way.** Measured against Nomad 2.9.25 on Windows: the
+Link sender only advances while Nomad is running its update loop, so a scene
+stops arriving when Nomad is in the background and resumes when it is focused.
+The same 412-object scene took one object and stalled indefinitely in the
+background, and 10 seconds with the window focused. **Keep Nomad in front while
+a scene transfers**; the node's Status says so when it notices a stall.
+`demo/probe.py` reproduces it with no Houdini involved.
+
+
 **`Permission denied` copying the package file (macOS).** The Houdini installer
 runs as root and can leave the preferences folder owned by root, so your user
 cannot write into it. Give it back to yourself, then copy again:

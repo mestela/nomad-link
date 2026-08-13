@@ -39,6 +39,7 @@ def main():
     ping_every = float(args[args.index("--ping") + 1]) if "--ping" in args else 0.0
     # re-ask when the sender goes quiet: does a stalled transfer resume?
     retry_after = float(args[args.index("--retry") + 1]) if "--retry" in args else 0.0
+    idle_stop = float(args[args.index("--idle") + 1]) if "--idle" in args else 20.0
 
     port = 48312
     if not host:
@@ -101,7 +102,7 @@ def main():
                       % (retry_after, counts["retries"]))
                 link.send({"type": "request_scene", "request_id": "probe%d" % counts["retries"]})
                 continue
-            if asked and now - last > 20.0:
+            if asked and now - last > idle_stop:
                 break
     except KeyboardInterrupt:
         pass

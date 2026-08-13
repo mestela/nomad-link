@@ -43,7 +43,26 @@ SURFACES = {
         "emission_color": "emissionColor",
     },
 }
+# aiStandardSurface is the same Autodesk Standard Surface model with the same
+# attribute names, so the table is shared. It matters because the vertex colour
+# reader is an Arnold node: feeding one into a non-Arnold shader is a hybrid
+# that mtoa does not necessarily translate, and the paint renders flat.
+SURFACES["aiStandardSurface"] = dict(SURFACES["standardSurface"], node="aiStandardSurface")
+
 DEFAULT_SURFACE = "standardSurface"
+SURFACE = "auto"   # or a name from SURFACES, to pin it
+
+
+def preferred_surface():
+    """aiStandardSurface when Arnold is loaded, since the paint readers are its."""
+    if SURFACE != "auto":
+        return SURFACE
+    try:
+        if cmds.pluginInfo("mtoa", query=True, loaded=True):
+            return "aiStandardSurface"
+    except Exception:
+        pass
+    return DEFAULT_SURFACE
 
 # Nothing reads a colour set into a shader natively, so it depends on what is
 # loaded. Each entry is (plugin, node type, the attribute naming the colour set).
@@ -85,8 +104,8 @@ def colour_reader(colour_set=COLOUR_SET):
     return None
 
 
-def surface_table(kind=DEFAULT_SURFACE):
-    return SURFACES.get(kind, SURFACES[DEFAULT_SURFACE])
+def surface_table(kind=None):
+    return SURFACES.get(kind or DEFAULT_SURFACE, SURFACES[DEFAULT_SURFACE])
 
 
 def set_value(node, attribute, value):
@@ -104,8 +123,9 @@ def set_colour(node, attribute, rgb):
         pass
 
 
-def build(block, name="nomad_material", kind=DEFAULT_SURFACE, painted=()):
+def build(block, name="nomad_material", kind=None, painted=()):
     """Create a shader and its shading group. Returns (shader, shading group)."""
+    kind = kind or preferred_surface()
     table = surface_table(kind)
     shader = cmds.shadingNode(table["node"], asShader=True, name=name)
     group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True,
@@ -134,9 +154,9 @@ def wire_painted(shader, table, key):
     return None
 
 
-def apply_block(shader, block, kind=DEFAULT_SURFACE):
+def apply_block(shader, block, kind=None):
     """Set what Nomad sent. Only edited fields travel, so absent means default."""
-    table = surface_table(kind)
+    table = surface_table(kind or preferred_surface())
 
     colour = block.get("color")
     if colour is not None:

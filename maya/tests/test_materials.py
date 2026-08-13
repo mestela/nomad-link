@@ -171,4 +171,19 @@ check("metalness" in targets, "painted metalness drives metalness")
 sets = [name for name in SCENE["shaders"] if name.startswith("nomad_nomad")]
 check(len(sets) >= 3, "one reader per colour set: %s" % sets)
 
+# ---- the shader follows the renderer, since the paint readers are Arnold nodes
+SCENE["plugins"] = ["mtoa"]
+check(materials.preferred_surface() == "aiStandardSurface",
+      "with Arnold loaded, an Arnold shader: a reader feeding a Maya shader is a "
+      "hybrid mtoa need not translate")
+arnold, _ = materials.build({"color": [1.0, 0.0, 0.0]}, name="arnold_test")
+check(SCENE["shaders"][arnold]["type"] == "aiStandardSurface",
+      "and that is what gets built: %s" % SCENE["shaders"][arnold]["type"])
+SCENE["plugins"] = []
+check(materials.preferred_surface() == "standardSurface",
+      "without it, Maya's own")
+materials.SURFACE = "standardSurface"
+check(materials.preferred_surface() == "standardSurface", "and the choice can be pinned")
+materials.SURFACE = "auto"
+
 print("\nall good")

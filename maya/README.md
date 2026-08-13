@@ -81,7 +81,13 @@ anything back to Nomad.
 `standardSurface` is Autodesk's version of the model OpenPBR describes, so the
 mapping is the Houdini bridge's with the names changed. The attribute names sit
 in a table per surface type in `materials.py`, so another renderer -- VRayMtl,
-aiStandardSurface -- is a table and a node name rather than a rewrite.
+for instance -- is a table and a node name rather than a rewrite.
+
+With Arnold loaded the bridge builds `aiStandardSurface` instead, which is the
+same model and the same attribute names. That is not a preference: the vertex
+colour readers are Arnold nodes, and feeding one into a non-Arnold shader is a
+hybrid mtoa need not translate. Pin it with `nomad_link.materials.SURFACE =
+"standardSurface"` if you want Maya's own.
 
 Two things worth knowing:
 

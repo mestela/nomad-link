@@ -41,6 +41,23 @@ flat scene.
 `import numpy` in the script editor; if it is missing, install it into Maya's
 Python (`mayapy -m pip install numpy`).
 
+## Reloading after an update
+
+Maya caches imported modules, so a new build does not take effect until the old
+one is purged (or Maya restarts). `importlib.reload` is not enough -- it does
+not touch submodules:
+
+```python
+import sys
+for name in [n for n in sys.modules if n == "nomad_link" or n.startswith("nomad_link.")]:
+    del sys.modules[name]
+import nomad_link
+```
+
+Unzipping over an older copy also leaves behind files that no longer exist in
+the new one. If something behaves like an older version, look for strays in
+`python/nomad_link/`.
+
 ## What arrives
 
 | Nomad | Maya |

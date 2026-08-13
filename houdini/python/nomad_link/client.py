@@ -121,6 +121,8 @@ class Client:
         self._callback = None
         self._last_ping = 0.0
         self._dirty_at = 0.0      # coalesce recooks: a transfer is hundreds of messages
+        self.last_author = 0.0    # how long the last rebuild took, to pace the next
+        self.receiving = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -157,12 +159,17 @@ class Client:
         self.connection.disconnect()
         self._remove_pump()
         self._dirty_at = 0.0
+        self.receiving = False
         self.peer_capabilities = set()
         self.nomad_version = ""
         self.message = "Disconnected"
 
     def send(self, header, binary=b""):
         return self.connection.send(header, binary)
+
+    @property
+    def object_count(self):
+        return len(self.meshes) + len(self.lights) + len(self.cameras) + len(self.groups)
 
     def clear_scene(self):
         """Forget every object. Textures are immutable per id, so they survive."""
@@ -243,10 +250,34 @@ class Client:
         live = " live" if header.get("live_sync") else ""
         return "<- %-16s %s%s" % (kind, str(who)[:24], live)
 
-    # a full stage rebuild per message makes a scene transfer quadratic, so hold
-    # off while packets are still arriving -- but never for longer than this
-    COALESCE = 0.2
+    # A full stage rebuild per message makes a scene transfer quadratic, so hold off
+    # while packets are still arriving. Nomad sends a big scene in bursts with real
+    # gaps between objects, so a fixed quiet threshold still rebuilds per object:
+    # the wait scales with how long the last rebuild actually took.
+    COALESCE = 0.35
     COALESCE_MAX = 2.0
+
+    def record_cook(self, seconds):
+        """A node reporting how long it actually took to rebuild.
+
+        Marking parms dirty is instant; the cook happens later in Houdini's own
+        loop, so this is the only place the real cost is visible. Several nodes
+        rebuild per refresh, so they accumulate within a refresh and decay after.
+        """
+        now = time.time()
+        if now - getattr(self, "_cook_window", 0.0) > 1.0:
+            self._cook_window = now
+            self.last_author = seconds
+        else:
+            self.last_author += seconds
+
+    def _quiet_for(self):
+        """How long to wait for silence before rebuilding."""
+        return max(self.COALESCE, self.last_author * 4.0)
+
+    def _patience(self):
+        """How long to defer a rebuild at most, however busy the link is."""
+        return max(self.COALESCE_MAX, self.last_author * 12.0)
 
     def pump(self):
         """Drain the socket queue. Main thread only (event loop or hython loop)."""
@@ -267,10 +298,22 @@ class Client:
         now = time.time()
         if self.revision != before:
             self._dirty_at = self._dirty_at or now  # first change of this burst
-        if self._dirty_at and (not packets or now - self._dirty_at > self.COALESCE_MAX):
-            # the burst has gone quiet (or run long enough): rebuild once
+            self._quiet_since = now
+            self.receiving = True
+        elif packets:
+            self._quiet_since = now
+        quiet = now - getattr(self, "_quiet_since", now)
+        if self._dirty_at and (quiet >= self._quiet_for()
+                               or now - self._dirty_at > self._patience()):
             self._dirty_at = 0.0
+            self.receiving = False
+            started = time.time()
             self._dirty_nodes()
+            self.last_author = time.time() - started
+        # the status field is cheap and does not dirty a cook, so it can keep up
+        nodes = self._nodes()
+        if nodes is not None:
+            nodes.refresh_status()
 
     def note(self, text):
         self.log.append(text)

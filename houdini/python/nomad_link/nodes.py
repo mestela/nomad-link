@@ -8,6 +8,7 @@ Cook-relevant parameters live on the inner Python SOP as channel references to
 the asset (see build_hda.py) so Houdini tracks them as real cook dependencies;
 everything else is read from the asset node.
 """
+import time
 import uuid
 
 import hou
@@ -66,7 +67,21 @@ def _set_attrib(geo, kind, name, values, size, default=0.0, integer=False):
 
 def status_text():
     link = client()
+    if link.receiving:
+        # no total is on the wire, so count what has arrived rather than invent one
+        return "Receiving: %d objects..." % link.object_count
+    if link.connected and link.object_count:
+        return "%s - %s (%d objects)" % (link.status, link.message, link.object_count)
     return "%s - %s" % (link.status, link.message)
+
+
+def refresh_status():
+    """Just the status field: cheap, and no cook depends on it."""
+    text = status_text()
+    for node in list(_instances(IN_TYPE)) + list(_instances(OUT_TYPE)) + list(_import_lops()):
+        parm = node.parm("status")
+        if parm is not None and parm.evalAsString() != text:
+            parm.set(text)
 
 
 def refresh_inputs(revision):
@@ -75,10 +90,7 @@ def refresh_inputs(revision):
         parm = node.parm("revision")
         if parm is not None and parm.eval() != revision:
             parm.set(revision)
-    for node in list(_instances(IN_TYPE)) + list(_instances(OUT_TYPE)) + list(_import_lops()):
-        parm = node.parm("status")
-        if parm is not None and parm.evalAsString() != status_text():
-            parm.set(status_text())
+    refresh_status()
 
 
 def store_mesh_id(node_path, mesh_id):
@@ -143,6 +155,7 @@ def send_button(kwargs):
 # --------------------------------------------------------------- In SOP (read)
 
 def cook_in(sop):
+    started = time.time()
     geo = sop.geometry()
     link = client()
     _eval(sop, "revision")  # cook dependency: new Nomad data bumps this
@@ -230,6 +243,7 @@ def cook_in(sop):
 
     geo.addAttrib(hou.attribType.Global, "nomad_mesh_ids", "")
     geo.setGlobalAttribValue("nomad_mesh_ids", " ".join(m["mesh_id"] for m in meshes))
+    link.record_cook(time.time() - started)
 
 
 def _create_points(geo, positions):
@@ -279,6 +293,7 @@ def cook_import(lop):
         link.note("authoring: %s" % problem) for problem in problems]
 
     _eval(lop, "revision")  # cook dependency: new Nomad data bumps this
+    started = time.time()
     usd.author_scene(
         lop.editableStage(),
         client(),
@@ -291,6 +306,7 @@ def cook_import(lop):
         light_scale=_eval(lop, "lightscale", 1.0),
         material_style=_eval(lop, "matstyle", "openpbr") or "openpbr",
     )
+    link.record_cook(time.time() - started)
 
 
 # -------------------------------------------------------------- Out SOP (write)

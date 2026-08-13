@@ -222,10 +222,11 @@ nomad.send({"type": "mesh_instance", "mesh_id": "m1-copy", "geometry_id": "g1",
             "name": "Sculpt Copy", "visible": True, "world_matrix": instance_matrix,
             "live_sync": False})
 check(wait(link, lambda: "m1-copy" in link.meshes), "the instance arrives")
+# rebuilds are coalesced, so wait for the stage to catch up rather than assume
+check(wait(link, lambda: bool(lop.stage().GetPrimAtPath("/nomad/Sculpt_Copy"))),
+      "the instance is on the stage")
 copied = lop.stage()
 copy_prim = copied.GetPrimAtPath("/nomad/Sculpt_Copy")
-check(bool(copy_prim), "the instance is on the stage: %s"
-      % [p.GetPath().pathString for p in copied.Traverse() if "Copy" in p.GetName()])
 copy_material = UsdShade.MaterialBindingAPI(copy_prim).GetDirectBinding().GetMaterial()
 check(bool(copy_material), "the instance has a material bound")
 check(copy_material.GetPath() == bound.GetPath(),
@@ -251,13 +252,16 @@ cached = link.textures["tex-e2e"]["path"]
 check(os.path.isfile(cached) and open(cached, "rb").read() == PNG,
       "the image file is on disk byte for byte: %s" % cached)
 
-textured = lop.stage()
-image = None
-for prim in textured.Traverse():
-    shader = UsdShade.Shader(prim)
-    if shader and shader.GetIdAttr().Get() in ("ND_image_color3", "UsdUVTexture"):
-        image = shader
-check(image is not None, "the material has an image node")
+def find_image():
+    for prim in lop.stage().Traverse():
+        shader = UsdShade.Shader(prim)
+        if shader and shader.GetIdAttr().Get() in ("ND_image_color3", "UsdUVTexture"):
+            return shader
+    return None
+
+
+check(wait(link, lambda: find_image() is not None), "the material has an image node")
+image = find_image()
 check(image.GetInput("file").Get().path == cached,
       "and it points at the cached blob: %s" % image.GetInput("file").Get().path)
 

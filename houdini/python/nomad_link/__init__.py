@@ -155,7 +155,9 @@ def ping(seconds=None):
     """
     _client_module = _module()
     if seconds is None:
-        return "ping every %.2fs (%.2fs while a transfer is expected)" % (
+        if not _client_module.PING_INTERVAL:
+            return "off (pings stall Nomad's sender mid-transfer)"
+        return "every %.2fs (%.2fs while a transfer is expected)" % (
             _client_module.PING_INTERVAL, _client_module.PING_INTERVAL_RECEIVING)
     _client_module.PING_INTERVAL = float(seconds)
     _client_module.PING_INTERVAL_RECEIVING = float(seconds)

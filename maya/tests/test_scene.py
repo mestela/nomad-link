@@ -96,7 +96,7 @@ link._store(mesh("c", "Hand", parent_id="p", world_matrix=convert.multiply(paren
                  local_matrix=child_local, world_matrix_parent=parent_world))
 scene.rebuild(link.revision + 1)
 check(SCENE["nodes"]["|Hand"]["parent"] == "|Body",
-      "the child is parented under its Nomad parent: %s" % SCENE["nodes"]["|Hand"])
+      "the child is created under its Nomad parent: %s" % SCENE["nodes"]["|Hand"])
 local = SCENE["transforms"]["|Hand"]
 check(abs(local[13] - 3.0) < 1e-6,
       "the child carries the local transform, not the world: %.3f" % local[13])
@@ -136,8 +136,10 @@ check(callable(nomad_link.ui), "nomad_link.ui() survives the window module being
 for name in ("connect", "disconnect", "get_scene", "get_selection", "clear", "report", "ui"):
     check(callable(getattr(nomad_link, name)), "nomad_link.%s exists" % name)
 
-# ---- an unassigned mesh renders flat green in Maya
-check(SCENE["shading"], "meshes are put in a shading group as they are built")
+# ---- an unassigned mesh renders flat green in Maya, so everything gets a group
+groups = {group for _shapes, group in SCENE["assignments"]}
+check("initialShadingGroup" in groups,
+      "a mesh with no Nomad material still lands in a shading group: %s" % groups)
 
 # ---- the window's live status comes from the pump
 import nomad_link.window as window_module  # noqa: E402

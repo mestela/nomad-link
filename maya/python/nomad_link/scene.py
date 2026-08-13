@@ -103,30 +103,22 @@ def mesh_arrays(mesh, scale=SCALE):
 def build_mesh(mesh, parent=None, scale=SCALE):
     """Create the transform and mesh shape for one Nomad object."""
     points, counts, connects = mesh_arrays(mesh, scale)
-    transform = OpenMaya.MFnTransform().create()
+    # created under the parent rather than reparented after: cmds.parent plus
+    # cmds.ls per object is a real cost across a few hundred
+    parent_object = None
+    if parent:
+        found = dag_path(parent)
+        parent_object = found.node() if found is not None else None
+    transform = (OpenMaya.MFnTransform().create(parent_object) if parent_object is not None
+                 else OpenMaya.MFnTransform().create())
     fn = OpenMaya.MFnMesh()
     fn.create(points, counts, connects, parent=transform)
 
     dag = OpenMaya.MFnDagNode(transform)
     dag.setName(valid_name(mesh["name"]))
-    path = dag.fullPathName()
-    if parent:
-        path = cmds.parent(path, parent)[0]
-        path = cmds.ls(path, long=True)[0]
-
     apply_uvs(fn, mesh)
     apply_colours(fn, mesh)
-    assign_default_shader(path)
-    return path
-
-
-def assign_default_shader(path):
-    """Without a shading group Maya draws the mesh flat green."""
-    try:
-        shapes = cmds.listRelatives(path, shapes=True, fullPath=True) or [path]
-        cmds.sets(shapes, edit=True, forceElement="initialShadingGroup")
-    except Exception:
-        pass
+    return dag.fullPathName()
 
 
 def float_array(values):
@@ -261,11 +253,34 @@ def clear():
 
 
 def rebuild(revision=None):
-    """Bring the Maya scene into line with the cache."""
-    global _revision
+    """Bring the Maya scene into line with the cache.
+
+    Maya redraws and records undo for every node created, which dominates the
+    cost across a few hundred objects. Both are restored whatever happens.
+    """
     link = client()
     if revision is not None and revision == _revision:
         return
+    undo = True
+    try:
+        cmds.refresh(suspend=True)
+        undo = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(stateWithoutFlush=False)
+    except Exception:
+        pass
+    try:
+        _rebuild(link)
+    finally:
+        try:
+            cmds.undoInfo(stateWithoutFlush=undo)
+            cmds.refresh(suspend=False)
+            cmds.refresh()
+        except Exception:
+            pass
+
+
+def _rebuild(link):
+    global _revision
     _revision = link.revision
 
     parent_of = {}
@@ -277,6 +292,7 @@ def rebuild(revision=None):
             parent_of[mesh_id] = mesh.get("parent_id")
 
     root_path = root()
+    pending = {}
     for mesh_id, mesh in order:
         existing = _built.get(mesh_id)
         if existing and cmds.objExists(existing):
@@ -287,7 +303,7 @@ def rebuild(revision=None):
             parent = _built.get(parent_of.get(mesh_id)) or root_path
             _built[mesh_id] = build_mesh(mesh, parent=parent)
         apply_transform(_built[mesh_id], mesh, link)
-        apply_material(mesh_id, mesh, link)
+        pending.setdefault(material_group(mesh_id, mesh, link), []).append(_built[mesh_id])
 
     for link_id, light in link.lights.items():
         if link_id in _built:
@@ -302,21 +318,31 @@ def rebuild(revision=None):
         _built[link_id] = cmds.parent(build_camera(camera), root_path)[0]
         apply_transform(_built[link_id], camera, link)
 
-    for mesh_id, path in list(_built.items()):
-        if mesh_id not in link.meshes and cmds.objExists(path):
+    for group, paths in pending.items():
+        materials.assign(group, paths)
+
+    for link_id, path in list(_built.items()):
+        known = (link_id in link.meshes or link_id in link.lights
+                 or link_id in link.cameras or link_id in link.groups)
+        if not known and cmds.objExists(path):
             cmds.delete(path)
-            _built.pop(mesh_id, None)
+            _built.pop(link_id, None)
 
 
-def apply_material(mesh_id, mesh, link):
-    """One shader per Nomad material; instances share the original's."""
+def material_group(mesh_id, mesh, link):
+    """The shading group this object belongs in; instances share the original's.
+
+    An unassigned mesh draws flat green, so everything gets a group even when
+    Nomad sent no material.
+    """
     key = mesh_id if mesh_id in link.materials else mesh.get("material_source")
     if key not in link.materials:
-        return
+        return "initialShadingGroup"
     if key not in _shaders:
         _shaders[key] = materials.build(
-            link.materials[key], name=valid_name(mesh["name"]) + "_mat")
-    materials.assign(_shaders[key][1], _built[mesh_id])
+            link.materials[key], name=valid_name(mesh["name"]) + "_mat",
+            painted="color" in mesh)
+    return _shaders[key][1]
 
 
 def apply_transform(path, mesh, link):

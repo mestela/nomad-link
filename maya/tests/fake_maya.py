@@ -70,6 +70,9 @@ class MDagPath:
     def __init__(self, name):
         self.name = name
 
+    def node(self):
+        return MObject(self.name)
+
 
 class MSelectionList:
     def __init__(self):
@@ -90,7 +93,8 @@ class MFnTransform:
 
     def create(self, parent=None):
         name = "|transform%d" % len(SCENE["nodes"])
-        SCENE["nodes"][name] = {"type": "transform", "parent": parent}
+        SCENE["nodes"][name] = {"type": "transform",
+                                "parent": parent.name if parent is not None else None}
         return MObject(name)
 
     def setTransformation(self, transformation):
@@ -219,10 +223,27 @@ def internalVar(**kwargs):
     return "/tmp/"
 
 
-def listRelatives(path, **kwargs):
+def refresh(**kwargs):
+    SCENE.setdefault("refresh", []).append(kwargs)
+
+
+def undoInfo(**kwargs):
+    if kwargs.get("query"):
+        return True
+    SCENE.setdefault("undo", []).append(kwargs)
+
+
+def pluginInfo(name, **kwargs):
+    return name in SCENE.get("plugins", [])
+
+
+def listRelatives(paths, **kwargs):
+    """Takes one name or a list, as the real command does."""
+    if isinstance(paths, str):
+        paths = [paths]
     if kwargs.get("parent"):
-        return [path.replace("Shape", "")]
-    return [path + "Shape"]
+        return [p.replace("Shape", "") for p in paths]
+    return [p + "Shape" for p in paths]
 
 
 def sets(shapes=None, **kwargs):
@@ -299,7 +320,8 @@ def install():
     cmds = types.ModuleType("maya.cmds")
     for name in ("objExists", "createNode", "parent", "ls", "delete", "setAttr",
                  "internalVar", "listRelatives", "sets", "shadingNode",
-                 "connectAttr", "getAttr", "camera", "window", "deleteUI",
+                 "connectAttr", "getAttr", "camera", "refresh", "undoInfo",
+                 "pluginInfo", "window", "deleteUI",
                  "columnLayout", "text",
                  "textFieldGrp", "button", "separator", "showWindow", "scriptJob"):
         setattr(cmds, name, globals()[name])

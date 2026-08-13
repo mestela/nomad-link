@@ -124,4 +124,31 @@ check(len(scene._shaders) == 1, "one shader for the pair, not one each")
 groups = {group for _shapes, group in SCENE["assignments"] if group != "initialShadingGroup"}
 check(len(groups) == 1, "and both meshes were assigned it: %s" % groups)
 
+# ---- lights and cameras must survive the sweep that removes stale meshes
+link.lights["L"] = {"link_id": "L", "name": "Key", "light_type": "POINT", "power": 5.0,
+                    "world_matrix": list(convert.IDENTITY)}
+link.cameras["C"] = {"link_id": "C", "name": "Shot", "fov_y": 40.0,
+                     "world_matrix": list(convert.IDENTITY)}
+SCENE["deleted"][:] = []
+scene.rebuild(link.revision + 1)
+check("L" in scene._built and "C" in scene._built, "the light and camera were built")
+scene.rebuild(link.revision + 2)
+check("L" in scene._built and "C" in scene._built,
+      "and are still there after another rebuild, not swept away as stale meshes")
+check(not [d for d in SCENE["deleted"] if "Key" in d or "Shot" in d],
+      "neither was deleted: %s" % SCENE["deleted"])
+
+# ---- a painted mesh gets a colour reader when a renderer supplies one
+SCENE["plugins"] = ["mtoa"]
+scene._shaders.clear()
+painted = mesh("m3", "Painted")
+painted["color"] = numpy.tile([0.5, 0.5, 0.5], (3, 1))
+link._store(painted)
+link.materials["m3"] = {"color": [1.0, 1.0, 1.0]}
+scene.rebuild(link.revision + 3)
+readers = [name for name, node in SCENE["shaders"].items() if node["type"] == "aiUserDataColor"]
+check(readers, "a colour reader is created when Arnold is loaded: %s" % list(SCENE["shaders"]))
+check(any(source.startswith(readers[0]) for source, _dest in SCENE["connections"]),
+      "and it drives the shader")
+
 print("\nall good")

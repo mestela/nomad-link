@@ -37,8 +37,13 @@ CAPABILITIES = [
     "mesh_instance",
     "hierarchy",      # parent_id / child_index / group (0.11.37)
     "scene_batch",
-    "skew",           # USD holds a skewed matrix directly, so no synthetic groups
+    "skew",           # a Maya matrix holds skew directly, so no synthetic groups
     "ngon",
+    # Nomad only sends these to peers that ask for them. Materials arrive inside
+    # mesh_full regardless, which hides a missing `material` here.
+    "material",
+    "light",
+    "camera_object",
 ]
 
 _client = None

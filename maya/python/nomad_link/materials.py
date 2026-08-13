@@ -45,6 +45,31 @@ SURFACES = {
 }
 DEFAULT_SURFACE = "standardSurface"
 
+# Nothing reads a colour set into a shader natively, so it depends on what is
+# loaded. Each entry is (plugin, node type, the attribute naming the colour set).
+COLOUR_READERS = (
+    ("mtoa", "aiUserDataColor", "colorAttrName"),
+    ("vrayformaya", "VRayVertexColors", "vertexColorSetName"),
+)
+COLOUR_SET = "nomad"
+
+
+def colour_reader():
+    """A node that reads the vertex colour set, if a renderer supplies one."""
+    for plugin, node_type, attribute in COLOUR_READERS:
+        try:
+            if not cmds.pluginInfo(plugin, query=True, loaded=True):
+                continue
+        except Exception:
+            continue
+        try:
+            node = cmds.shadingNode(node_type, asUtility=True, name="nomad_vertex_colour")
+            cmds.setAttr("%s.%s" % (node, attribute), COLOUR_SET, type="string")
+            return node
+        except Exception:
+            continue
+    return None
+
 
 def surface_table(kind=DEFAULT_SURFACE):
     return SURFACES.get(kind, SURFACES[DEFAULT_SURFACE])
@@ -65,7 +90,7 @@ def set_colour(node, attribute, rgb):
         pass
 
 
-def build(block, name="nomad_material", kind=DEFAULT_SURFACE):
+def build(block, name="nomad_material", kind=DEFAULT_SURFACE, painted=False):
     """Create a shader and its shading group. Returns (shader, shading group)."""
     table = surface_table(kind)
     shader = cmds.shadingNode(table["node"], asShader=True, name=name)
@@ -73,6 +98,15 @@ def build(block, name="nomad_material", kind=DEFAULT_SURFACE):
                       name=shader + "SG")
     cmds.connectAttr(shader + ".outColor", group + ".surfaceShader", force=True)
     apply_block(shader, block, kind)
+    if painted:
+        # Nomad paints per vertex; the base colour is only the tint under it
+        reader = colour_reader()
+        if reader:
+            try:
+                cmds.connectAttr(reader + ".outColor",
+                                 "%s.%s" % (shader, table["base_color"]), force=True)
+            except Exception:
+                pass
     return shader, group
 
 
@@ -159,9 +193,12 @@ def apply_additive(shader, block, table):
         set_value(shader, table["opacity"], value)
 
 
-def assign(shading_group, path):
+def assign(shading_group, paths):
+    """One call per group: cmds.sets per mesh is a real cost across hundreds."""
+    if isinstance(paths, str):
+        paths = [paths]
     try:
-        shapes = cmds.listRelatives(path, shapes=True, fullPath=True) or [path]
+        shapes = cmds.listRelatives(list(paths), shapes=True, fullPath=True) or list(paths)
         cmds.sets(shapes, edit=True, forceElement=shading_group)
     except Exception:
         pass

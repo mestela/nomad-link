@@ -39,7 +39,7 @@ __all__ = [
     "sync_all",
     "send_button", "send_geometry", "cook_in", "cook_out", "cook_import", "mesh_menu",
     "refresh_inputs", "status_text", "store_mesh_id", "answer_request",
-    "watch", "report", "material", "display", "bindings",
+    "watch", "report", "material", "display", "bindings", "ping", "advertise", "drop",
 ]
 
 
@@ -139,6 +139,47 @@ def bindings():
             reason = "shares geometry with %s" % (link.meshes.get(key, {}).get("name", key))
         print("  %-24s -> %-24s %s" % (
             mesh["name"][:24], (link.meshes.get(key, {}).get("name", key or "-"))[:24], reason))
+
+
+def _module():
+    """nomad_link.client is the accessor function, so reach the module explicitly."""
+    import importlib
+    return importlib.import_module("nomad_link.client")
+
+
+def ping(seconds=None):
+    """Set the keepalive interval, 0 to stop pinging. Applies immediately.
+
+    Worth turning off entirely if a transfer stalls: it isolates whether our
+    traffic is interfering with Nomad's sending.
+    """
+    _client_module = _module()
+    if seconds is None:
+        return "ping every %.2fs (%.2fs while a transfer is expected)" % (
+            _client_module.PING_INTERVAL, _client_module.PING_INTERVAL_RECEIVING)
+    _client_module.PING_INTERVAL = float(seconds)
+    _client_module.PING_INTERVAL_RECEIVING = float(seconds)
+    return "ping every %.2fs" % float(seconds) if seconds else "keepalive off"
+
+
+def advertise(*names):
+    """Replace what we advertise in the hello; call with nothing to restore.
+
+    Reconnect for it to take effect -- capabilities are only sent at hello. Use
+    it to bisect a misbehaving peer: drop a capability and see what changes.
+    """
+    _client_module = _module()
+    link = client()
+    link.connection.capabilities = list(names) if names else list(_client_module.CAPABILITIES)
+    return "advertising: %s" % ", ".join(sorted(link.connection.capabilities))
+
+
+def drop(*names):
+    """Stop advertising these capabilities. Reconnect to apply."""
+    link = client()
+    link.connection.capabilities = [c for c in link.connection.capabilities
+                                    if c not in names]
+    return "advertising: %s" % ", ".join(sorted(link.connection.capabilities))
 
 
 def watch(enable=True):

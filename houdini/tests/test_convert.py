@@ -53,7 +53,7 @@ def test_ngon_round_trip():
     check(numpy.allclose(mesh["texcoords"][mesh["corner_uv"]], texcoords, atol=1e-6),
           "ngon uvs survive")
     check(numpy.allclose(mesh["color"], numpy.linspace(0, 1, 21).reshape(7, 3), atol=0.01),
-          "rgbm8 colour round trips within a byte")
+          "rgbm8 color round trips within a byte")
     check(numpy.allclose(mesh["rough"], numpy.linspace(0, 1, 7), atol=0.01), "roughness round trips")
     check(numpy.array_equal(mesh["face_group"], [0, 1, 1]), "face groups survive")
     check(numpy.array_equal(mesh["face_hidden"], [0, 1, 0]), "hidden faces survive")

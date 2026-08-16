@@ -17,7 +17,7 @@ import transport
 
 PROTOCOL = 1
 DEFAULT_PORT = 48312
-CLIENT_NAME = "Marmoset Toolbag"
+CLIENT_NAME = "Toolbag"  # the product name, like the other clients ("Blender", "ZBrush")
 PING_INTERVAL = 10.0
 RECONNECT_DELAY = 3.0
 

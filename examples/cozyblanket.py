@@ -338,7 +338,7 @@ class Bridge:
         self.camera_renew_at = 0.0
         self.last_camera = None  # last CozyBlanket packet, to claim only on actual movement
         self.claimed = False
-        self.pivot = None  # world-space orbit centre: the target's middle, or Nomad's own pivot
+        self.pivot = None  # world-space orbit center: the target's middle, or Nomad's own pivot
         self.live = True
         self.live_poll_at = 0.0
         self.resend_at = 0.0  # retry a push that Nomad bounced while mid-gesture
@@ -420,7 +420,7 @@ class Bridge:
             if header.get("active_source") == "nomad":
                 self.claimed = False  # Nomad's user took over; reclaim on the next CB movement
         elif kind == "camera":
-            pivot = header.get("pivot")  # adopt Nomad's own orbit centre while its user drives
+            pivot = header.get("pivot")  # adopt Nomad's own orbit center while its user drives
             if pivot:
                 self.pivot = numpy.array(pivot, "f8")
         elif kind == "error":

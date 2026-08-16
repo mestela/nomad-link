@@ -18,9 +18,9 @@ TCP. Each packet is one frame:
 | 4 | JSON payload size, unsigned 32-bit **big-endian** |
 | 4 | binary payload size, unsigned 32-bit **big-endian** |
 | n | JSON object, UTF-8 |
-| m | binary payload (may be empty) |
+| m | binary payload (can be empty) |
 
-Limits: JSON ≤ 50 MiB, disconnect on larger. Binary is bounded by its uint32 size field.
+Limits: JSON ≤ 50 MiB, disconnect on larger. A uint32 size field bounds the binary payload.
 
 JSON payloads are objects with a `"type"` string. Ignore unknown types and fields.
 Offsets are byte offsets into the binary payload. When binary data is present,
@@ -57,7 +57,7 @@ A bridge can use either method or accept an address from the user.
   `"coordinate_system": "nomad_y_up"` where relevant. Units are arbitrary scene units.
 - **Matrices**: 16 floats, **column-major** (`world_matrix[column*4 + row]`).
 - **Mesh transforms**: vertex positions are in node-local space; `world_matrix` places
-  the node. For skewed transforms, Nomad may also send `world_matrix_parent` and
+  the node. For skewed transforms, Nomad also sends `world_matrix_parent` and
   `local_matrix` (world = parent × local; both are skew-free). Use the split if needed,
   otherwise use `world_matrix`.
 - **Hierarchy**: `parent_id` holds the parent's `link_id`; `""` is the scene root. An
@@ -67,7 +67,7 @@ A bridge can use either method or accept an address from the user.
   prefer the pair, `world_matrix` stays the flattened value for peers without hierarchy.
   When it is absent, the pair is the skew split above. A `local_matrix` that is itself
   skewed splits again, and the extra frame belongs between the parent and the node.
-  To a peer without the `skew` capability, a skewed **root** object is sent under a
+  To a peer without the `skew` capability, Nomad sends a skewed **root** object under a
   synthetic `group` whose id is `<link_id>/skew` and whose `world_matrix` is the skew
   frame — a lone object cannot hold skew in every application. The synthetic group is
   wire-only bookkeeping: a peer that can represent skew treats a `/skew` `parent_id` as
@@ -83,8 +83,7 @@ A bridge can use either method or accept an address from the user.
   carries any face size (§7.1). Nomad currently splits n-gons into tris/quads on
   arrival, so a mesh sent as `corners` comes back as `int32x4`.
 - **Ids**: `mesh_id` / `link_id` / `geometry_id` are opaque strings chosen by whichever
-  side names the entity first. UUIDs are recommended. Keep them for the life of the
-  link.
+  side names the entity first. Prefer UUIDs. Keep them for the life of the link.
 - **Enums**: enumerated keys travel as strings, never integers. Every accepted value
   is listed with its key in this document. An unknown value leaves the receiver's
   field unchanged.
@@ -120,14 +119,14 @@ Nomad's `hello` reply:
     "bridge_version": "...",
     "minimum_bridge_version": "...",
     "capabilities": ["..."],
-    "pair_token": "<present only when a new pairing was just approved>"
+    "pair_token": "<present only when Nomad approves a new pairing>"
 }
 ```
 
 Store `pair_token` persistently and send it in future hellos for silent reconnects.
-The version fields are used by the reference client's updater; other bridges may ignore
-them. Use `{"type": "ping"}` / `{"type": "pong"}` as a keepalive. An `error` can arrive
-at any time; see §9.
+The reference client's updater uses the version fields; other bridges can ignore them.
+Use `{"type": "ping"}` / `{"type": "pong"}` as a keepalive. An `error` can arrive at any
+time; see §9.
 
 ### Capabilities
 
@@ -175,7 +174,7 @@ Nomad owns the live-sync settings and sends revisions to clients.
     "sync_postprocess": false,   // §10.1; optional in set_session_config
     // informational — the masked active_source stays authoritative:
     "peers": ["Nomad iPad"],     // other connected devices, recipient excluded
-    "source_name": "Nomad iPad"  // device currently sending live edits (may be you)
+    "source_name": "Nomad iPad"  // device currently sending live edits (might be you)
 }
 ```
 
@@ -244,7 +243,9 @@ Complete mesh state in one frame.
     "texcoord_offset": 192,               // 14 × 8 B; v origin is top-left (glTF style),
     "texcoord_format": "float32x2",       //   Blender-style consumers flip v = 1 - v
     "face_uv_offset": 304,                // int32x4 per face: texcoord indices,
-                                          // corner order matching the face, 6 × 16 B
+                                          // corner order matching the face, 6 × 16 B;
+                                          // weld before sending: corners at equal uv share
+                                          // one index, seams and islands are read off the sharing
 
     "color_offset": 400,                  // Nomad's native color bytes (u8 r,g,b,m):
     "color_format": "rgbm8",              //   linear rgb = rgb * (m / 65025), 8 × 4 B
@@ -280,11 +281,11 @@ Complete mesh state in one frame.
     "layers": [                           // sculpt layers, user-layer order
         {
             "name": "Layer 1",
-            "factor": 1.0,                // applied weight = factor × factor_offset
-            "factor_offset": 1.0,
+            "factor": 1.0,                // [0, 1], applied weight = factor × factor_offset
+            "factor_offset": 1.0,         //   unbounded
             "visible": true,              // shown = visible && visible_offset
             "visible_offset": true,
-            "factor_color": 1.0,          // per-channel paint weights and visibility
+            "factor_color": 1.0,          // [0, 1] per-channel paint weights and visibility
             "factor_roughness": 1.0,
             "factor_metalness": 1.0,
             "factor_opacity": 1.0,
@@ -311,6 +312,7 @@ Complete mesh state in one frame.
     "layer_active": -1,                   // layer being edited, -1 = base mesh
                                           // (Blender: active shape key, Basis = -1)
 
+    "primitive": { /* §7.1.2 */ },
     "material": { /* §10 */ }
 }
 ```
@@ -344,9 +346,62 @@ The four fields replace `face_offset` / `face_uv_offset`, everything else is unc
 }
 ```
 
-Nomad accepts this format but has no n-gons of its own yet: each is split into
+Nomad accepts this format but has no n-gons of its own yet: it splits each into
 tris/quads on arrival (face groups follow the split), so a round trip returns
-`int32x4`. Peers that keep the topology should not re-send what they receive.
+`int32x4`. Peers that keep the topology must not re-send what they receive.
+
+### 7.1.2 `primitive` — parametric objects
+
+Nomad's primitives (box, tube, lathe…) are meshes with a config behind them. The config
+rides on the mesh_full that carries the baked result, so one frame serves every peer:
+the arrays stay authoritative and the receiver regenerates nothing on arrival, exactly
+as when Nomad loads a `.nom` (`triplanar` excepted, below). No capability — the block is
+additive, and a peer that does not understand it reads the arrays as usual.
+
+```jsonc
+"primitive": {
+    "format": 1,          // lowest revision that can read this block; ignore it above yours
+    "type": "tube",       // "mesh" = not parametric, see below
+    "config": { }         // opaque: Nomad's own per-type serialization
+}
+```
+
+`format` is the block's requirement, not the sender's version, so a later revision can add
+a type without shutting older peers out of the ones they already take.
+
+- **absent** — the frame says nothing about it, so the receiver's object keeps whatever
+  kind it has. This is what every non-Nomad bridge sends.
+- **`"type": "mesh"`** — the sender's object is not parametric: drop the config and keep
+  a plain mesh.
+- **a known type** — adopt it. Changing type means a new object, since the type *is* the
+  object's kind; the config alone changes nothing until a parameter is edited.
+
+`type` is `mesh`, or one of `box`, `sphere_cube`, `sphere_uv`, `icosahedron`, `cylinder`,
+`cone`, `torus`, `plane`, `tube`, `lathe`, `triplanar`. Treat an unknown name as absent.
+
+`config` is opaque and versioned by `format` only — its contents are Nomad's own
+parameters, and no peer needs them to draw the object, since the arrays already carry the
+result. Round-trip it unmodified, or drop it. Editing a parameter regenerates the
+geometry locally and sends a new `mesh_full`, so the next edit corrects a config that
+does not match its arrays, never silently.
+
+A parametric object takes no `mesh_delta` (§7.2) in either direction — Nomad refuses
+sparse edits on one, and sends its own paint and mask strokes as full frames.
+
+**`triplanar`** is the one type whose arrays are *not* its state. The object
+is a bake of three mask planes, so the masks travel with it in the binary payload and the
+receiver re-bakes rather than adopting the arrays:
+
+```jsonc
+"canvas_mask_count": 69312,       // vertices of the three planes, derived from the config
+"canvas_mask_offset": 812345,     // uint16 per plane vertex
+"canvas_mask_format": "uint16_norm"
+```
+
+A grid the config generates indexes the masks, so a receiver that lays that grid
+out differently — a different Nomad build — must reject the block on a `canvas_mask_count`
+mismatch and keep the arrays as a plain mesh. Peers that only pass the block through are
+unaffected: the arrays in the same frame are still the finished object.
 
 ### 7.2 `mesh_delta` — sparse updates (both directions)
 
@@ -369,7 +424,7 @@ and becomes one undo step on the receiver.
     "position_format": "float32x3",
     "color_offset": 48,               // 3 × 4 B; every §7.1 per-vertex channel
     "color_format": "rgbm8",          //   (opacity, roughness, metalness, mask,
-                                      //   density) may travel likewise — all optional;
+                                      //   density) can travel likewise — all optional;
                                       //   paint sections carry the COMPOSITED values
 
     "base_color_offset": 60           // 3 × 4 B; base stroke on a layered mesh: the
@@ -434,7 +489,7 @@ has been sent, send its other instances as:
     "name": "...",
     "visible": true,
     "locked": false,
-    "repeat": true,               // optional: procedural copy (e.g. a Nomad repeat)
+    "repeat": true,               // optional: procedural copy (a Nomad repeat)
     "world_matrix": [...],
     "parent_id": "...",
     "child_index": 2,
@@ -446,8 +501,8 @@ has been sent, send its other instances as:
 The receiver creates an object that shares the group's geometry. If its `mesh_id`
 already uses other geometry, reassign it.
 
-A `repeat` instance is owned by its sender: the receiver applies every update but
-never sends geometry, transform, or deletion under its `mesh_id`. Edits to the shared
+The sender owns a `repeat` instance: the receiver applies every update but never
+sends geometry, transform, or deletion under its `mesh_id`. Edits to the shared
 geometry travel under the geometry owner's `mesh_id` instead.
 
 If `geometry_id` is unknown, send `error` and
@@ -458,7 +513,7 @@ If an existing node receives a different `geometry_id` in `mesh_full`, detach it
 its old group. If it receives new topology with the same `geometry_id`, replace the
 geometry for the whole group. Send one delta per shared geometry, not per instance.
 
-Instances share geometry, not hierarchy. There is no instanced subtree: a peer that
+Instances share geometry, not hierarchy. No instanced subtree exists: a peer that
 instances a whole branch sends every copy as its own nodes.
 
 ## 9. Recovery
@@ -475,7 +530,7 @@ instances a whole branch sends every copy as its own nodes.
   never `mesh_instance`.
 - Without `link_id`, `request_mesh` and `request_selection` request the current
   selection. `request_scene` requests all objects.
-- If a live edit cannot be applied, mark the object stale and do not send its geometry.
+- If you cannot apply a live edit, mark the object stale and do not send its geometry.
   When it becomes writable, request a targeted `mesh_full`. Do not claim sync while any
   local object is stale.
 - An unknown `parent_id` is not an error: keep the node at the root with its
@@ -513,6 +568,7 @@ needs no ack. Peers without `hierarchy` ignore it and keep every object at the r
 {
     "type": "group",
     "repeat": true,   // optional: a procedural container (Nomad repeater) rides the group flow
+    "repeater": { /* §10.4 */ },
     // …object_state fields: link_id, name, visible, parent_id, child_index, matrices, live_sync…
 }
 ```
@@ -545,7 +601,7 @@ a re-parent must land before the delete that orphans it.
 - Split a batch that would exceed the JSON limit; each part is its own step.
 - Send the entries individually to peers without `scene_batch`, re-parents first.
 
-`material` — the same `material` object is embedded in `mesh_full` headers:
+`material` — `mesh_full` headers embed the same `material` object:
 
 ```jsonc
 {
@@ -554,24 +610,24 @@ a re-parent must land before the delete that orphans it.
     "live_sync": true,
     "material": {
         "color": [1.0, 1.0, 1.0],             // linear RGB, [0, 1]
-        "opacity": 1.0,                       // [0, 1]
+        "opacity": 1.0,                       // [0, 1] ([0, 5] on additive)
         "roughness": 0.25,                    // [0, 1]
         "metalness": 0.0,                     // [0, 1]
         "material_type": "opaque",            // opaque | subsurface | blending | additive
                                               // | refraction | dithering | shadow_catcher
         "reflectance": 0.5,                   // [0, 1] specular, 0.5 = 4% F0
         "shadow_color": [0.0, 0.0, 0.0],      // linear RGB (shadow_catcher)
-        "refraction_ior": 1.33,
-        "refraction_surface_roughness": 0.0,  // [0, 1]
-        "refraction_interior_roughness": 0.0, // [0, 1]
+        "refraction_ior": 1.33,               // [1, 5]
+        "refraction_surface_roughness": 0.0,  // [-1, 1]
+        "refraction_interior_roughness": 0.0, // [-1, 1]
         "absorption_enable": false,           // refraction interior absorption
         "absorption_albedo": true,
-        "absorption_factor": 1.0,
+        "absorption_factor": 1.0,             // [0, 30]
         "absorption_color": [1.0, 1.0, 1.0],  // linear RGB
         "subsurface_color": [1.0, 0.2, 0.1],  // linear RGB
         "subsurface_depth": 0.15,             // scene units; < 0 = auto
         "translucency": true,
-        "translucency_factor": 1.0,
+        "translucency_factor": 1.0,           // [0, 1]
         "use_color_opacity_auto": true,       // color texture alpha drives opacity †
         "use_color_opacity_value": true,
         "wireframe_visible_auto": true,       // †
@@ -609,15 +665,15 @@ a re-parent must land before the delete that orphans it.
                 "offset": [0.0, 0.0],         // uv transform
                 "scale": [1.0, 1.0],
                 "rotation": 0.0,              // radians
-                "triplanar_hardness": [0.9, 0.9, 0.9],
+                "triplanar_hardness": [0.9, 0.9, 0.9], // [0, 1] each
                 "triplanar_world": true,
-                "factor": [1.0, 1.0, 1.0]     // multiplies the sample; rgb on color and
+                "factor": [1.0, 1.0, 1.0]     // [0, 1], multiplies the sample; rgb on color and
                                               // emissive, scalar on the other channels.
                                               // color multiplies vertex paint on top, the
                                               // other channels replace it
             },
             "normal": { "texture_id": "…", "factor": 1.0, "neg_y": false },
-            "emissive": { "texture_id": "…", "factor": [1.0, 1.0, 1.0], "strength": 1.0 },
+            "emissive": { "texture_id": "…", "factor": [1.0, 1.0, 1.0], "strength": 1.0 }, // strength [0, 10000]
             "roughness": {}                   // explicit clear. Channels: color, roughness,
                                               // metalness, normal, emissive, occlusion,
                                               // displacement, opacity
@@ -630,8 +686,8 @@ a re-parent must land before the delete that orphans it.
 value comes from the receiver's default. Send `<name>_auto: true` only to restore that
 default.
 
-Send only edited fields. Absent fields are unchanged. The matcap channel is not
-supported. `mesh_full` also has top-level `smooth_shading`.
+Send only edited fields. Absent fields are unchanged. The protocol has no matcap
+channel. `mesh_full` also has top-level `smooth_shading`.
 
 A `color` / `opacity` / `roughness` / `metalness` edit on a mesh the sender shades flat is
 followed by `mesh_attributes` (§7.3) carrying the new value per vertex.
@@ -642,27 +698,27 @@ followed by `mesh_attributes` (§7.3) carrying the new value per vertex.
 {
     "type": "light",
     // …object_state fields (link_id, name, visible, world_matrix, live_sync)…
-    "light_type": "POINT",     // POINT | SUN | SPOT | ENVIRONMENT
+    "light_type": "point",     // point | directional | spot | environment
     "color": [1.0, 1.0, 1.0],  // linear RGB
     "use_kelvin": false,       // true: kelvin replaces color outright (no tint on top)
-    "kelvin": 6500,
-    "intensity": 1.0,          // SUN strength (normalized)
-    "power": 1.0,              // POINT/SPOT strength (world space)
-    "factor": 1.0,             // ENVIRONMENT multiplier
+    "kelvin": 6500,            // [1000, 13000]
+    "intensity": 1.0,          // [0, 10000] directional strength (normalized)
+    "power": 1.0,              // >= 0, point/spot strength (world space)
+    "factor": 1.0,             // >= 0, environment multiplier
     "spot_angle": 0.785,       // radians [0, π], full outer cone angle
     "spot_softness": 0.5,      // [0, 1] blend: inner = (1 - softness) × outer
-    "angle": 0.0,              // radians [0, π], SUN angular size (softness)
-    "size": 0.0,               // scene units, POINT/SPOT radius
+    "angle": 0.0,              // radians [0, π], directional angular size (softness)
+    "size": 0.0,               // scene units, point/spot radius
     "attachment": "fixed",     // fixed | camera (the light follows the working view)
     "shadow_type": "shadow_map", // shadow_map | screen_space
     "shadow_cast": true,
-    "shadow_tolerance": 0.0,
+    "shadow_tolerance": 1.0,   // [1, 10]
     "contact_shadow": false,
-    "contact_tolerance": 0.0
+    "contact_tolerance": 1.0   // [1, 10]
 }
 ```
 
-Send only edited fields. Other applications may ignore Nomad-specific settings such as
+Send only edited fields. Other applications can ignore Nomad-specific settings such as
 `attachment` and shadow tuning.
 
 `camera_object`:
@@ -672,7 +728,7 @@ Send only edited fields. Other applications may ignore Nomad-specific settings s
     "type": "camera_object",
     // …object_state fields…
     "orthographic": false,
-    "fov_y": 50.0,             // degrees, vertical
+    "fov_y": 50.0,             // degrees, vertical, [5, 90]
     "pivot": [0.0, 0.0, 0.0]   // world orbit point; absent when the camera has none set
 }
 ```
@@ -685,9 +741,9 @@ viewport and discard older pending messages.
     "type": "camera",
     "world_from_view": [ /* 16 floats, column-major, view → world */ ],
     "pivot": [0.0, 0.0, 0.0],  // world orbit point
-    "fov_y": 50.0,             // degrees, vertical
+    "fov_y": 50.0,             // degrees, vertical, [5, 90]
     "orthographic": false,
-    "ortho_scale": 1.0,        // world height of the ortho frustum
+    "ortho_scale": 1.0,        // > 0, world height of the ortho frustum
     "coordinate_system": "nomad_y_up"
 }
 ```
@@ -715,7 +771,7 @@ sends one of each with `"live_sync": false`. Apply them even when the channel is
         "environment_name": "studio",    // library name
         "environment_id": "1f0c…",       // only for a user file: blob content id (§10.3)
         "environment_rotation": 0.0,     // degrees [0, 360); absent = the image's default
-        "environment_exposure": 1.0,     // absent = the image's default
+        "environment_exposure": 1.0,     // >= 0, absent = the image's default
         "environment_attached_to_camera": false,
         "environment_enable": true,      // environment lighting on
         "show_textures": true,
@@ -734,7 +790,7 @@ twins travel only when the image is a user file, so the peer can tell whether it
 already has those pixels (§10.3); a built-in carries no id and resolves by name alone.
 
 Environment images are equirectangular. Nomad samples one in its Y-up world with the image
-centre at **-Z**, `u` increasing toward **+X**, and the top row at **+Y**;
+center at **-Z**, `u` increasing toward **+X**, and the top row at **+Y**;
 `environment_rotation` turns the image about **+Y**.
 
 ```jsonc
@@ -747,61 +803,61 @@ centre at **-Z**, `u` increasing toward **+X**, and the top row at **+Y**;
         "postprocess_ssr_enable": false,           // screen-space reflections
 
         "postprocess_ssgi_enable": false,          // screen-space global illumination
-        "postprocess_ssgi_factor": 0.5,
+        "postprocess_ssgi_factor": 0.5,            // [0, 1]
 
         "postprocess_ssao_enable": false,          // ambient occlusion
-        "postprocess_ssao_radius": -1.0,           // < 0 = auto
-        "postprocess_ssao_factor": 2.0,
-        "postprocess_ssao_thickness": 0.25,
+        "postprocess_ssao_radius": -1.0,           // scene units, < 0 = auto
+        "postprocess_ssao_factor": 2.0,            // [0, 10]
+        "postprocess_ssao_thickness": 0.25,        // [0, 1]
         "postprocess_ssao_color": [0.0, 0.0, 0.0], // linear RGB
 
         "postprocess_dof_enable": false,           // depth of field
-        "postprocess_dof_blur_near": 0.5,
-        "postprocess_dof_blur_far": 0.5,
+        "postprocess_dof_blur_near": 1.0,       // [0, 10] coc gain, 1.0 = physical thin lens
+        "postprocess_dof_blur_far": 1.0,        // [0, 10]
+        "postprocess_dof_physical": false,      // true = aperture drives both gains
+        "postprocess_dof_aperture": 2.8,        // f-number [0.01, 4096], world unit = meter
 
         "postprocess_sharpness_enable": false,
-        "postprocess_sharpness_factor": 0.5,
+        "postprocess_sharpness_factor": 0.5,       // [0, 1]
 
         "postprocess_chromatic_enable": false,     // chromatic aberration
-        "postprocess_chromatic_factor": 0.5,
+        "postprocess_chromatic_factor": 0.5,       // [0, 1]
 
         "postprocess_vignette_enable": false,
-        "postprocess_vignette_size": 0.5,
-        "postprocess_vignette_hardness": 0.5,
+        "postprocess_vignette_size": 0.5,          // [0, 1]
+        "postprocess_vignette_hardness": 0.5,      // [0, 1]
+        "postprocess_vignette_color": [0.0, 0.0, 0.0], // linear RGB, black = plain darkening
 
         "postprocess_bloom_enable": false,
-        "postprocess_bloom_intensity": 1.0,
-        "postprocess_bloom_radius": 0.6,
-        "postprocess_bloom_threshold": 0.25,
+        "postprocess_bloom_intensity": 1.0,         // [0, 10000]
+        "postprocess_bloom_radius": 0.6,            // [0, 1]
+        "postprocess_bloom_threshold": 0.25,        // >= 0
         "postprocess_bloom_color": [1.0, 1.0, 1.0], // linear RGB
 
         "postprocess_grain_enable": false,          // film grain
-        "postprocess_grain_factor": 0.25,
+        "postprocess_grain_factor": 0.25,           // [0, 1]
 
         "postprocess_tone_enable": false,
-        "postprocess_tone_exposure": 1.0,
-        "postprocess_tone_saturation": 1.0,
-        "postprocess_tone_contrast": 0.0,
-        "postprocess_tone_mapping": "agx",          // none | kajiya | agx | khronos
-                                                    // | aces | aces_original | aces_knarko
-                                                    // | filmic | generic | hejl | lottes
-                                                    // | oklab | reinhard | uchimura | unreal
+        "postprocess_tone_exposure": 1.0,           // [0, 10]
+        "postprocess_tone_saturation": 1.0,         // [0, 10]
+        "postprocess_tone_contrast": 0.0,           // [-1, 1]
+        "postprocess_tone_mapping": "agx",          // none | kajiya | agx | aces
 
         "postprocess_curvature_enable": false,      // bump/cavity shading
-        "postprocess_curvature_factor": 1.0,
-        "postprocess_curvature_bump": [1.0, 1.0, 1.0, 1.0],   // linear RGB + alpha
-        "postprocess_curvature_cavity": [0.0, 0.0, 0.0, 1.0], // linear RGB + alpha
-        "postprocess_curvature_thickness": 1.0,
+        "postprocess_curvature_factor": 1.0,        // [0, 10]
+        "postprocess_curvature_bump": [1.0, 1.0, 1.0, 1.0],   // linear RGB + alpha weight [0, 10]
+        "postprocess_curvature_cavity": [0.0, 0.0, 0.0, 1.0], // linear RGB + alpha weight [0, 10]
+        "postprocess_curvature_thickness": 1.0,     // [0.1, 3]
         "postprocess_curvature_bump_blend": "normal",  // §7.1 blend modes, "auto" included
         "postprocess_curvature_cavity_blend": "auto",
 
         "postprocess_pixel_art_enable": false,
-        "postprocess_pixel_art_ratio": 5,           // integer pixel size
+        "postprocess_pixel_art_ratio": 5,           // integer pixel size, [2, 10]
         "postprocess_pixel_art_allow_accumulate": false,
 
         "postprocess_scanline_enable": false,
-        "postprocess_scanline_factor": 1.0,
-        "postprocess_scanline_spacing": 1.0,
+        "postprocess_scanline_factor": 1.0,         // [0, 1]
+        "postprocess_scanline_spacing": 1.0,        // [1, 3]
 
         "postprocess_curve_enable": false,          // color curves
         "postprocess_curve_red": { /* easing, below */ },
@@ -827,7 +883,7 @@ Each `postprocess_curve_*` is an easing object:
                                      // | in_out_power_3 | in_out_power_4 | in_out_power_5
                                      // | in_out_circle | out_in_circle | out_in_power
                                      // | one_over_x
-    "power": 2.0,                    // exponent of the *_power presets
+    "power": 2.0,                    // [1, 10] exponent of the *_power presets
     "shift": 0.0,                    // [-1, 1] input bias
     "curve": {                       // custom curve, overrides the preset when set
         "type": "catmull-rom",       // none | catmull-rom | spline
@@ -857,7 +913,7 @@ same bytes. Cache blobs for the session and do not request an id already cached.
   send blobs to peers without the `texture` capability.
 - **Receiver**: for an unknown id, keep the current texture and send
   `{"type": "request_texture", "texture_id": "…"}`. Assign it when the blob arrives.
-  Reply with `error` if an id cannot be provided.
+  Reply with `error` if you cannot provide the id.
 - Texture blobs are not live edits. They are not gated by `live_sync`; ignore
   duplicates and relay them to viewers.
 - Treat `name` as untrusted display data (basename only), never as a path.
@@ -884,7 +940,7 @@ the file bytes, so the same image on both devices never travels.
 - **Receiver**: for an unknown id, ignore the name (a local file of the same name is not
   the same image) unless its bytes hash to that id, keep the current asset and send
   `{"type": "request_asset", "collection": "…", "asset_id": "…"}`. Apply the config once
-  the blob arrives. Reply with `error` if an id cannot be provided.
+  the blob arrives. Reply with `error` if you cannot provide the id.
 - Asset blobs are not live edits. They are not gated by `live_sync`; ignore duplicates and
   relay them to viewers.
 - Treat `name` as untrusted display data (basename only), never as a path.
@@ -892,6 +948,40 @@ the file bytes, so the same image on both devices never travels.
   both. The reference Blender extension maps `environments` onto the world background and
   ignores `matcaps`.
 - Nomad keeps a received image for the session only, and embeds it into a saved project.
+
+### 10.4 `repeater` — procedural copies
+
+A Nomad repeater (array, curve, mirror, radial) travels as the `group` that carries it,
+with its config attached. Unlike a primitive (§7.1.2) it has no baked form to fall back
+on: the copies it makes are derived state that Nomad itself never stores, so the config
+*is* the object.
+
+```jsonc
+"repeater": {
+    "format": 1,          // lowest revision that can read this block; ignore it above yours
+    "type": "array",      // array | curve | mirror | radial, or "group" = not a repeater
+    "config": { }         // opaque: Nomad's own serialization
+}
+```
+
+Because the config is the object, a peer that adopts it makes its own copies — and must
+then **ignore the copies in the same stream**, or the scene doubles. Those are exactly the
+objects flagged `"repeat": true` (§8) whose parent chain reaches a repeater the peer holds.
+Ignore them, never delete them: the objects never exist on that peer, and the
+flagged messages that follow (`object_state`, `object_delete`) are equally moot.
+
+A peer that does not adopt the config — every bridge, and any peer that does not know the
+type — leaves the flag unmatched and keeps materializing the copies exactly as before. So
+the sender's stream is the same either way, and both halves of a mixed session are correct.
+
+- **absent** — the frame says nothing about it; the receiver's node keeps its kind.
+- **`"type": "group"`** — the sender's node is a plain group.
+- **a known type** — adopt it. Creation decides the kind; on an existing object, apply
+  only the type and config, since Nomad never turns a repeater into a group in place (it
+  validates the copies into real objects and deletes the node).
+
+Per-copy manual edits are not in the config, and not in a saved `.nom` either, so a
+config-only round trip loses exactly what a save and reload loses.
 
 ## 11. Versioning
 

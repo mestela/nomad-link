@@ -6,7 +6,7 @@ sync with other applications: meshes, sculpt layers, paint, materials, lights, c
 **[PROTOCOL.md](PROTOCOL.md) is the wire specification** — enough to write a bridge for
 any application, in any language.
 
-Version **0.11.42**, protocol **1**.
+Version **0.11.43**, protocol **1**.
 
 ## Contents
 
@@ -25,9 +25,10 @@ Version **0.11.42**, protocol **1**.
 ## ZBrush
 
 Desktop Nomad speaks GoZ on its own: turn it on in the **Link** menu, nothing to
-install. Only Nomad on iPad needs the bridge script, running on the ZBrush computer.
+install. Only Nomad on iPad needs the bridge script, which runs on the ZBrush computer.
 Download **[nomad-link-bridges.zip](https://github.com/stephomi/nomad-link/releases/latest/download/nomad-link-bridges.zip)**
-(the example scripts, no Blender extension), unzip it, then (Python 3 and numpy):
+(the example scripts, no Blender extension) and unzip it. The bridges need Python 3 and
+NumPy:
 
 ```
 python3 zbrush.py --help
@@ -56,8 +57,8 @@ unzip it, and copy the enclosed `NomadLink` folder into Toolbag's user plugin fo
 
 Install it in Blender by adding the remote repository
 `https://nomadsculpt.com/blender/index.json`, which serves the contents of
-`blender/repository`. Installing from the repository (rather than a bare ZIP) lets the
-extension update itself when the protocol minimum changes.
+`blender/repository`. Installing from the repository (rather than a bare ZIP file) lets
+the extension update itself when the protocol minimum changes.
 
 ## License
 

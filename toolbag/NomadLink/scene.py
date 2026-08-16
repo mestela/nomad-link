@@ -295,7 +295,7 @@ class Scene:
 
     def apply_light(self, link_id, block):
         """Nomad light -> a Toolbag LightObject; ENVIRONMENT stays on the sky."""
-        if block.get("light_type") == "ENVIRONMENT":
+        if block.get("light_type") == "environment":
             return None
         obj = self.objects.get(link_id)
         if obj is None or not _alive(obj):
@@ -322,7 +322,7 @@ class Scene:
         if "kelvin" in block:
             _try_set(obj, "temperature", float(block["kelvin"]))
         # the block carries every strength; only one drives this light's type
-        key = {"SUN": "intensity", "POINT": "power", "SPOT": "power"}.get(
+        key = {"directional": "intensity", "point": "power", "spot": "power"}.get(
             block.get("light_type"))
         if key and key in block:
             # Nomad's strengths are unitless, so Toolbag's lux/lumens mode
@@ -751,7 +751,7 @@ class Scene:
         self.materials.clear()
 
 
-LIGHT_TYPES = {"SUN": "directional", "POINT": "omni", "SPOT": "spot"}
+LIGHT_TYPES = {"directional": "directional", "point": "omni", "spot": "spot"}
 
 
 # ------------------------------------------------------------------- utilities
@@ -773,7 +773,7 @@ def euler_from_matrix(matrix, degrees=True):
     """
     import math
     m = list(matrix)
-    # basis vectors, normalised so a scaled matrix still yields a pure rotation
+    # basis vectors, normalized so a scaled matrix still yields a pure rotation
     columns = []
     for c in range(3):
         x, y, z = m[c * 4], m[c * 4 + 1], m[c * 4 + 2]

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import hashlib
 import json
 import math
 import os
@@ -16,6 +17,7 @@ import bmesh
 from bpy.app.handlers import persistent
 from mathutils import Matrix, Vector
 
+from . import nom_file
 from .transport import Connection, discover, DEFAULT_CAPABILITIES
 
 
@@ -33,7 +35,7 @@ REPEAT_TAG = "nomad_repeat"
 TRANSFORM_PARENT_ID = "nomad_transform_parent_id"  # legacy, purged on connect (skew rides matrix_parent_inverse now)
 MATERIAL_ID = "nomad_link_material"
 ASSET_ID = "nomad_asset_id"  # matcap/environment blobs, the shading counterpart of nomad_texture_id
-# Nomad samples its equirect with the image centre at -Z in a Y-up world, Blender's sits at
+# Nomad samples its equirect with the image center at -Z in a Y-up world, Blender's sits at
 # +X: the world vector needs this fixed twist about Z before the HDRI's own rotation
 ENVIRONMENT_TWIST = -90.0
 FACE_GROUP_ATTRIBUTE = "nomad_face_group"
@@ -117,7 +119,7 @@ def supported_object(obj):
 
 
 def channel_enabled(scene, obj):
-    if obj.type in {"MESH", "EMPTY"}:  # an empty is a Nomad group: it organises objects
+    if obj.type in {"MESH", "EMPTY"}:  # an empty is a Nomad group: it organizes objects
         return scene.nomad_link_sync_objects
     if obj.type == "LIGHT":
         return scene.nomad_link_sync_lights
@@ -1968,17 +1970,20 @@ def encode_mesh(obj, mesh, live, include_material, replace_topology):
     if uv_layer:
         uv_values = foreach_get(uv_layer.data, "uv", 2)
         uv_values[:, 1] = 1.0 - uv_values[:, 1]  # back to Nomad's top-left v origin
-        header["texcoord_count"] = len(mesh.loops)
+        # weld equal corner uvs into shared texcoords: Nomad reads islands off the indices
+        _, first, corner_uvs = numpy.unique(uv_values.view(numpy.int64).ravel(),
+                                            return_index=True, return_inverse=True)
+        header["texcoord_count"] = len(first)
         header["texcoord_offset"] = len(binary)
         header["texcoord_format"] = "float32x2"
-        binary.extend(uv_values.astype("<f4").tobytes())
-        loop_indices = numpy.arange(len(mesh.loops), dtype=numpy.int32)
+        binary.extend(uv_values[first].astype("<f4").tobytes())
+        corner_uvs = corner_uvs.reshape(-1).astype(numpy.int32)
         if ngon:
             header["corner_texcoord_offset"] = len(binary)
-            binary.extend(loop_indices.astype("<i4").tobytes())
+            binary.extend(corner_uvs.astype("<i4").tobytes())
         else:
             header["face_uv_offset"] = len(binary)
-            binary.extend(corner_table(loop_starts, quad, loop_indices).tobytes())
+            binary.extend(corner_table(loop_starts, quad, corner_uvs).tobytes())
 
     colors, roughness, metalness = paint_channels(mesh)
     if colors is not None:
@@ -2030,11 +2035,13 @@ def encode_mesh(obj, mesh, live, include_material, replace_topology):
             records = numpy.empty(len(indices), LAYER_DTYPE)
             records["index"] = indices
             records["offset"] = to_nomad_vectors(difference[indices])
+            # Nomad's main factor slider is [0, 1]: overshoot and sign ride the offset factor
+            factor = min(abs(key.value), 1.0)
             header["layers"].append(
                 {
                     "name": key.name,
-                    "factor": key.value,
-                    "factor_offset": 1.0,
+                    "factor": factor,
+                    "factor_offset": key.value / factor if factor > 0.0 else 1.0,
                     "visible": not key.mute,
                     "visible_offset": True,
                     "offset": len(binary),
@@ -2266,11 +2273,17 @@ def kelvin_to_rgb(kelvin):
     return tuple((max(0.0, min(channel, 255.0)) / 255.0) ** 2.2 for channel in (red, green, blue))
 
 
+# Nomad names its light types; Blender has no environment light, so one round-tripped from
+# Nomad rides an AREA light plus the custom property written on receive
+NOMAD_LIGHT_TYPES = {"SUN": "directional", "POINT": "point", "SPOT": "spot"}
+BLENDER_LIGHT_TYPES = {"directional": "SUN", "point": "POINT", "spot": "SPOT"}
+
+
 def send_light(obj, live=False):
     data = obj.data
-    light_type = data.type
-    if obj.get("nomad_light_type") == "ENVIRONMENT":
-        light_type = "ENVIRONMENT"
+    light_type = NOMAD_LIGHT_TYPES.get(data.type, "point")
+    if obj.get("nomad_light_type") == "environment":
+        light_type = "environment"
     header = {
         "type": "light",
         "live_sync": live,
@@ -2692,20 +2705,10 @@ def send_world(live):
     return True
 
 
-def receive_light(header):
-    link_id = header.get("link_id", "")
-    obj = find_linked_object(link_id)
-    if obj is None:
-        data = bpy.data.lights.new(header.get("name", "Nomad Light"), "POINT")
-        obj = bpy.data.objects.new(header.get("name", "Nomad Light"), data)
-        bpy.context.collection.objects.link(obj)
-        obj[MESH_ID] = link_id
-    if obj.type != "LIGHT":
-        raise ValueError("Linked object is not a light")
-    show_scene_shading("use_scene_lights")
-    light_type = header.get("light_type", "POINT")
+def apply_light_properties(obj, header):
+    light_type = header.get("light_type", "point")
     obj["nomad_light_type"] = light_type
-    obj.data.type = light_type if light_type in {"POINT", "SUN", "SPOT", "AREA"} else "AREA"
+    obj.data.type = BLENDER_LIGHT_TYPES.get(light_type, "AREA")
     use_kelvin = bool(header.get("use_kelvin", False))
     obj.data.use_temperature = use_kelvin
     if "kelvin" in header:
@@ -2728,6 +2731,27 @@ def receive_light(header):
         obj.data.angle = float(header.get("angle", obj.data.angle))
     if obj.data.type in {"POINT", "SPOT"}:
         obj.data.shadow_soft_size = float(header.get("size", obj.data.shadow_soft_size))
+
+
+def apply_camera_properties(obj, header):
+    obj.data.type = "ORTHO" if header.get("orthographic", False) else "PERSP"
+    obj.data.sensor_fit = "VERTICAL"
+    fov = math.radians(float(header.get("fov_y", 50.0)))
+    obj.data.lens = obj.data.sensor_height / (2.0 * max(math.tan(fov * 0.5), 0.001))
+
+
+def receive_light(header):
+    link_id = header.get("link_id", "")
+    obj = find_linked_object(link_id)
+    if obj is None:
+        data = bpy.data.lights.new(header.get("name", "Nomad Light"), "POINT")
+        obj = bpy.data.objects.new(header.get("name", "Nomad Light"), data)
+        bpy.context.collection.objects.link(obj)
+        obj[MESH_ID] = link_id
+    if obj.type != "LIGHT":
+        raise ValueError("Linked object is not a light")
+    show_scene_shading("use_scene_lights")
+    apply_light_properties(obj, header)
     apply_object_state(obj, header)
 
 
@@ -2741,10 +2765,7 @@ def receive_camera_object(header):
         obj[MESH_ID] = link_id
     if obj.type != "CAMERA":
         raise ValueError("Linked object is not a camera")
-    obj.data.type = "ORTHO" if header.get("orthographic", False) else "PERSP"
-    obj.data.sensor_fit = "VERTICAL"
-    fov = math.radians(float(header.get("fov_y", 50.0)))
-    obj.data.lens = obj.data.sensor_height / (2.0 * max(math.tan(fov * 0.5), 0.001))
+    apply_camera_properties(obj, header)
     apply_object_state(obj, header)
 
 
@@ -3771,6 +3792,397 @@ class NOMAD_PT_link(bpy.types.Panel):
                 replace.operator("nomad.get_replace", text="Replace all", icon="FILE_REFRESH")
 
 
+def import_nom_mesh(geometry, name, material=None, compose=True):
+    """A Blender mesh from one nom_file.Geometry. Returns it with the flags make_material
+    needs to know which channels came as vertex paint."""
+    positions = to_blender_vectors(geometry.vertices)
+    vertex_count = len(positions)
+    faces = geometry.faces
+    face_count = len(faces)
+    corner_mask = numpy.ones((face_count, 4), bool)
+    corner_mask[:, 3] = faces[:, 3] >= 0  # Nomad packs a triangle as a quad with w < 0
+    corner_verts = faces[corner_mask]
+    if corner_verts.size and (corner_verts.min() < 0 or corner_verts.max() >= vertex_count):
+        raise ValueError(f"{name}: face indices out of range")
+    loop_totals = corner_mask.sum(axis=1).astype(numpy.int32)
+    loop_starts = numpy.zeros(face_count, numpy.int32)
+    numpy.cumsum(loop_totals[:-1], out=loop_starts[1:])
+
+    mesh = bpy.data.meshes.new(name)
+    mesh.vertices.add(vertex_count)
+    mesh.vertices.foreach_set("co", positions.astype(numpy.float32).ravel())
+    mesh.loops.add(int(corner_verts.size))
+    mesh.loops.foreach_set("vertex_index", corner_verts)
+    mesh.polygons.add(face_count)
+    mesh.polygons.foreach_set("loop_start", loop_starts)
+    mesh.polygons.foreach_set("loop_total", loop_totals)
+
+    if geometry.uvs is not None and geometry.faces_uv is not None:
+        corner_uvs = geometry.faces_uv[corner_mask]
+        if corner_uvs.size and corner_uvs.min() >= 0 and corner_uvs.max() < len(geometry.uvs):
+            # Nomad's v origin is top-left (glTF style), Blender's bottom-left
+            texcoords = numpy.column_stack((geometry.uvs[:, 0], 1.0 - geometry.uvs[:, 1]))
+            mesh.uv_layers.new(name="UVMap").data.foreach_set("uv", texcoords[corner_uvs].ravel())
+
+    # the composited paint, base + layers -- what Nomad renders, not the bare base arrays
+    painted = nom_file.composited(geometry, material, compose)
+    has_color = "color" in painted
+    if has_color:
+        alpha = painted.get("opacity")
+        if alpha is None:
+            alpha = numpy.ones(vertex_count, numpy.float64)
+        attribute = mesh.color_attributes.new(name=COLOR_ATTRIBUTE, type="FLOAT_COLOR", domain="POINT")
+        attribute.data.foreach_set("color",
+                                   numpy.column_stack((painted["color"], alpha)).astype(numpy.float32).ravel())
+
+    has_roughness = "roughness" in painted
+    if has_roughness:
+        set_float_attribute(mesh, ROUGHNESS_ATTRIBUTE, painted["roughness"].astype(numpy.float32))
+    has_metalness = "metalness" in painted
+    if has_metalness:
+        set_float_attribute(mesh, METALNESS_ATTRIBUTE, painted["metalness"].astype(numpy.float32))
+    if geometry.masks is not None:
+        set_sculpt_mask(mesh, 1.0 - geometry.masks[:, 0].astype(numpy.float32) / 65535.0)
+    if geometry.faces_group is not None:
+        # FaceMeta: group in bits 0-14, the hidden-face DISCARD flag in bit 15
+        meta = geometry.faces_group[:, 0]
+        set_face_groups(mesh, (meta & 0x7FFF).astype(numpy.int32))
+        set_hidden_faces(mesh, (meta & 0x8000) != 0)
+
+    mesh.update(calc_edges=True)
+    return mesh, has_color, has_roughness, has_metalness
+
+
+# image type -> filename suffix, so from-bytes loading picks the right decoder
+NOM_IMAGE_SUFFIX = {"image/png": ".png", "image/jpeg": ".jpg",
+                    "image/vnd.radiance": ".hdr", "image/x-exr": ".exr"}
+# per-channel texture factor, stored flat on the .nom material entry
+NOM_CHANNEL_FACTORS = {"color": "factorColor", "roughness": "factorRoughness",
+                       "metalness": "factorMetalness", "normal": "factorNormal",
+                       "emissive": "factorEmissive", "opacity": "factorOpacity"}
+
+
+def import_nom_image(name, mime, data, tag, tag_value):
+    """The embedded blob as a packed Image, deduplicated by content hash via `tag`."""
+    if "." not in name:
+        name += NOM_IMAGE_SUFFIX.get(mime, ".png")
+    image = image_from_bytes(name, data)
+    image[tag] = tag_value
+    return image
+
+
+def import_nom_settings(nom, source):
+    """Wire-shaped material settings from a .nom material entry: the embedded texture
+    blobs become local packed images (content-hash ids, shared across imports), and the
+    file's camelCase sampler keys become the wire names apply_material_textures reads."""
+    settings = dict(source)
+    textures = settings.pop("textures", None)
+    if not isinstance(textures, dict):
+        return settings
+    out = {}
+    for channel, jtex in textures.items():
+        if not isinstance(jtex, dict):
+            continue
+        data = nom_file.blob(nom, nom_file.entry(nom, "images", jtex.get("index")))
+        if not data:
+            continue
+        texture_id = "nom-" + hashlib.sha1(data).hexdigest()
+        if find_texture_image(texture_id) is None:
+            import_nom_image(str(jtex.get("name") or channel),
+                            str(nom_file.entry(nom, "images", jtex.get("index")).get("type", "")),
+                            data, "nomad_texture_id", texture_id)
+        converted = {"texture_id": texture_id,
+                     "projection": jtex.get("projection", "auto"),
+                     "wrap_s": jtex.get("wrapS", "repeat"),
+                     "wrap_t": jtex.get("wrapT", "repeat"),
+                     "min_filter": jtex.get("minFilter", "auto"),
+                     "mag_filter": jtex.get("magFilter", "auto")}
+        for key in ("offset", "scale", "rotation", "triplanar_hardness", "triplanar_world"):
+            if key in jtex:
+                converted[key] = jtex[key]
+        factor = settings.get(NOM_CHANNEL_FACTORS.get(channel, ""), None)
+        if factor is not None:
+            converted["factor"] = factor
+        if channel == "normal":
+            converted["neg_y"] = settings.get("normal_neg_y", settings.get("flip_y", False))
+        out[channel] = converted
+    settings["textures"] = out
+    return settings
+
+
+def apply_nom_layers(obj, geometry):
+    """The file's dense layer offsets as shape keys, in the wire's model: Basis holds the
+    positions with every layer backed out, each key re-adds one layer at its factor. The
+    file stores composed positions (the wire subtracts before sending), so the backing-out
+    happens here; lattice layers are internal and stay out, like the wire's user filter."""
+    layers = [layer for layer in geometry.layers if not layer["config"].get("lattice_offset")]
+    if not layers:
+        return
+    if len(layers) > 256:
+        raise ValueError("Too many sculpt layers")
+
+    def final_factor(config):
+        if not (config.get("visible", True) and config.get("visible_offset", True)):
+            return 0.0
+        return float(config.get("factor", 1.0)) * float(config.get("factor_offset", 1.0))
+
+    base = to_blender_vectors(geometry.vertices).astype(numpy.float64)
+    for layer in layers:
+        factor = final_factor(layer["config"])
+        if layer["offsets"] is not None and factor:
+            base -= factor * to_blender_vectors(layer["offsets"]).astype(numpy.float64)
+
+    flat = base.astype(numpy.float32).ravel()
+    obj.data.vertices.foreach_set("co", flat)  # the datablock becomes the base, as the wire
+    basis = obj.shape_key_add(name="Basis")
+    basis.data.foreach_set("co", flat)
+    for layer in layers:
+        config = layer["config"]
+        key = obj.shape_key_add(name=config.get("name") or "Nomad Layer")
+        factor = float(config.get("factor", 1.0)) * float(config.get("factor_offset", 1.0))
+        key.slider_min = min(-1.0, factor)
+        key.slider_max = max(1.0, factor)
+        key.value = factor
+        key.mute = not (config.get("visible", True) and config.get("visible_offset", True))
+        data = base if layer["offsets"] is None else base + to_blender_vectors(layer["offsets"])
+        key.data.foreach_set("co", data.astype(numpy.float32).ravel())
+
+    active = position = 0  # the file's index spans all layers, the keys only the user ones
+    for index, layer in enumerate(geometry.layers):
+        if layer["config"].get("lattice_offset"):
+            continue
+        position += 1
+        if index == geometry.active_layer:
+            active = position
+    obj.active_shape_key_index = active
+
+
+def import_nom_environment(nom):
+    """The file's embedded environment onto the world, through the link's shading path."""
+    found = nom_file.environment(nom)
+    if found is None:
+        return
+    name, data = found
+    asset_id = "nom-" + hashlib.sha1(data).hexdigest()
+    if find_asset_image(asset_id) is None:
+        import_nom_image(name, "image/vnd.radiance", data, ASSET_ID, asset_id)
+    settings = nom.json.get("settings") or {}
+    shading = {"environment_id": asset_id}
+    for key in ("environment_rotation", "environment_exposure", "environment_enable"):
+        legacy = key.replace("environment_", "env_")  # pre-rename settings prefix
+        if key in settings:
+            shading[key] = settings[key]
+        elif legacy in settings:
+            shading[key] = settings[legacy]
+    apply_shading_config(shading)
+
+
+def place_imported(collection, obj, parent, target):
+    """Parent obj and give it the world `target` exactly. Blender objects author only
+    loc/rot/scale, so a skewed target gets a nomad_unskew parent empty holding the clean
+    part while the skew residue rides matrix_parent_inverse, the one slot that keeps it."""
+    clean = Matrix.LocRotScale(*target.decompose())
+    scale = max(1.0, max(abs(value) for row in target for value in row))
+    if all(abs(clean[i][j] - target[i][j]) < 1e-4 * scale for i in range(4) for j in range(4)):
+        obj.matrix_world = target
+        set_parent_keep_world(obj, parent)
+        return
+    empty = bpy.data.objects.new("nomad_unskew", None)
+    empty.empty_display_size = 0.1
+    collection.objects.link(empty)
+    empty.matrix_world = clean
+    set_parent_keep_world(empty, parent)
+    obj.parent = empty
+    obj.parent_type = "OBJECT"
+    obj.matrix_parent_inverse = clean.inverted_safe() @ target
+    obj.matrix_basis = Matrix.Identity(4)
+
+
+def import_nom(context, path, scale=1.0, repeats=True, environment=True, compose=True):
+    """Build the file's scene tree under the active collection. Returns (objects, skipped)."""
+    nom = nom_file.NomFile(path)
+    nodes = nom_file.scene(nom)
+    collection = context.collection
+    objects = {}
+    worlds = {}
+    built = {}  # mesh index -> shared datablock: instances stay instances
+    built_active = {}  # mesh index -> active shape key, mirrored onto every instance
+    created = []
+    shown = {}  # Nomad visibility cascades: a hidden group hides its whole subtree
+    skipped = 0
+    root = Matrix.Scale(scale, 4)  # uniform, so it commutes with the axis conjugation
+
+    for node in nodes:
+        # depth-first order guarantees the parent's world is already resolved
+        parent_world = worlds[node.parent] if node.parent is not None else root
+        worlds[node.index] = parent_world @ matrix_from_columns(node.matrix)
+        shown[node.index] = node.visible and (node.parent is None or shown[node.parent])
+
+        mesh = built.get(node.mesh) if node.mesh is not None else None
+        fresh = None
+        if mesh is None:
+            geometry = nom_file.geometry(nom, node.mesh) if node.mesh is not None else None
+            if geometry is not None:
+                settings = import_nom_settings(nom, nom_file.material(nom, geometry.material))
+                mesh, has_color, has_roughness, has_metalness = import_nom_mesh(geometry, node.name,
+                                                                                settings, compose)
+                built[node.mesh] = mesh
+                fresh = geometry
+                make_material(mesh, {"material": settings}, has_color, has_roughness, has_metalness)
+                smooth = bool(settings.get("smooth_shading", True))
+                mesh.polygons.foreach_set("use_smooth", [smooth] * len(mesh.polygons))
+        if mesh is not None:
+            obj = bpy.data.objects.new(node.name, mesh)
+            if fresh is not None:
+                apply_nom_layers(obj, fresh)
+                built_active[node.mesh] = obj.active_shape_key_index
+            elif mesh.shape_keys:
+                # the layer is the mesh's: every instance sculpts the same key, as the wire
+                obj.active_shape_key_index = built_active.get(node.mesh, 0)
+        elif node.light is not None:
+            source = nom_file.entry(nom, "lights", node.light)
+            obj = bpy.data.objects.new(node.name, bpy.data.lights.new(node.name, "POINT"))
+            header = dict(source)
+            header["light_type"] = source.get("type", "point")  # the file's key for the wire's
+            apply_light_properties(obj, header)
+        elif node.camera is not None:
+            source = nom_file.entry(nom, "cameras", node.camera)
+            obj = bpy.data.objects.new(node.name, bpy.data.cameras.new(node.name))
+            apply_camera_properties(obj, {"orthographic": source.get("orthographic", False),
+                                          "fov_y": source.get("fovy", 50.0)})
+        else:
+            skipped += node.mesh is not None
+            obj = bpy.data.objects.new(node.name, None)
+            obj.empty_display_size = 0.1
+        collection.objects.link(obj)
+        objects[node.index] = obj
+        created.append(obj)
+
+    for node in nodes:
+        obj = objects[node.index]
+        parent = objects[node.parent] if node.parent is not None else None
+        # meshes conjugate because their vertices are swizzled, as apply_object_transform
+        frame = TO_NOMAD if obj.type == "MESH" else Matrix.Identity(4)
+        place_imported(collection, obj, parent, TO_BLENDER @ worlds[node.index] @ frame)
+        for values in node.repeats if repeats and obj.type == "MESH" else []:
+            copy = bpy.data.objects.new(node.name, obj.data)
+            collection.objects.link(copy)
+            created.append(copy)
+            # the hint carries world transforms, like the link wire: exact placement
+            place_imported(collection, copy, parent, TO_BLENDER @ root @ matrix_from_columns(values) @ TO_NOMAD)
+            if not shown[node.index]:
+                copy.hide_set(True)
+        if not shown[node.index]:
+            obj.hide_set(True)
+
+    if environment:
+        import_nom_environment(nom)
+    return created, skipped
+
+
+class NOMAD_OT_import_nom(bpy.types.Operator):
+    bl_idname = "nomad.import_nom"
+    bl_label = "Import Nomad Sculpt"
+    bl_description = "Open a Nomad Sculpt .nom file as objects"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={"SKIP_SAVE"})
+    directory: bpy.props.StringProperty(subtype="DIR_PATH", options={"SKIP_SAVE"})
+    files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement, options={"SKIP_SAVE"})
+    filter_glob: bpy.props.StringProperty(default="*.nom", options={"HIDDEN"})
+
+    scale: bpy.props.FloatProperty(
+        name="Scale", default=1.0, min=0.0001, soft_max=100.0,
+        description="Uniform scale applied to the imported objects")
+    import_repeats: bpy.props.BoolProperty(
+        name="Repeater Instances", default=True,
+        description="Instantiate the file's repeater hint as linked duplicates")
+    import_environment: bpy.props.BoolProperty(
+        name="Environment", default=True,
+        description="Apply the file's embedded HDRI to the world background")
+    import_composited: bpy.props.BoolProperty(
+        name="Composited Paint", default=True,
+        description="Blend the paint layers over the base, as Nomad renders; "
+                    "off imports the base paint only")
+
+    def paths(self):
+        found = [os.path.join(self.directory, item.name) for item in self.files if item.name]
+        return found or ([self.filepath] if self.filepath else [])
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        paths = self.paths()
+        if len(paths) > 1:
+            column = layout.box().column(align=True)
+            for path in paths[:6]:
+                column.label(text=os.path.basename(path))
+            if len(paths) > 6:
+                column.label(text=f"... {len(paths) - 6} more")
+        layout.prop(self, "scale")
+        header, body = layout.panel("nomad_import_include", default_closed=False)
+        header.label(text="Include")
+        if body:
+            body.prop(self, "import_repeats")
+            body.prop(self, "import_environment")
+            body.prop(self, "import_composited")
+
+    def invoke(self, context, _event):
+        paths = self.paths()
+        if paths:
+            # dropped files: confirm in a dialog instead of importing on the spot
+            title = os.path.basename(paths[0]) if len(paths) == 1 else f"{len(paths)} Nomad files"
+            return context.window_manager.invoke_props_dialog(
+                self, width=360, title=title, confirm_text="Import")
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        paths = self.paths()
+        if not paths:
+            self.report({"ERROR"}, "No file to import")
+            return {"CANCELLED"}
+
+        for obj in context.selected_objects:
+            obj.select_set(False)
+        total = skipped = 0
+        for path in paths:
+            try:
+                objects, missed = import_nom(context, path, scale=self.scale,
+                                             repeats=self.import_repeats,
+                                             environment=self.import_environment,
+                                             compose=self.import_composited)
+            except (OSError, ValueError, KeyError) as error:
+                self.report({"ERROR"}, f"{os.path.basename(path)}: {error}")
+                return {"CANCELLED"}
+            for obj in objects:
+                obj.select_set(True)
+            if objects:
+                context.view_layer.objects.active = objects[0]
+            total += len(objects)
+            skipped += missed
+
+        note = f", {skipped} unsupported" if skipped else ""
+        self.report({"INFO"}, f"Imported {total} objects from {len(paths)} file(s){note}")
+        return {"FINISHED"}
+
+
+class NOMAD_FH_import_nom(bpy.types.FileHandler):
+    bl_idname = "NOMAD_FH_import_nom"
+    bl_label = "Nomad Sculpt"
+    bl_import_operator = NOMAD_OT_import_nom.bl_idname
+    bl_file_extensions = ".nom"
+
+    @classmethod
+    def poll_drop(cls, context):
+        return context.area is not None and context.area.type in {"VIEW_3D", "OUTLINER"}
+
+
+def menu_import_nom(self, _context):
+    self.layout.operator(NOMAD_OT_import_nom.bl_idname, text="Nomad Sculpt (.nom)")
+
+
 classes = (
     NomadLinkPreferences,
     NOMAD_OT_forget_pairing,
@@ -3784,6 +4196,8 @@ classes = (
     NOMAD_OT_get_replace,
     NOMAD_OT_send,
     NOMAD_OT_update,
+    NOMAD_OT_import_nom,
+    NOMAD_FH_import_nom,
     NOMAD_PT_link,
 )
 
@@ -3792,6 +4206,7 @@ def register():
     print(f"Nomad Blender Link {VERSION} · build {BUILD}", flush=True)
     for cls in classes:
         bpy.utils.register_class(cls)
+    bpy.types.TOPBAR_MT_file_import.append(menu_import_nom)
     bpy.types.Scene.nomad_link_camera_target = bpy.props.EnumProperty(
         name="View Target",
         items=(
@@ -3856,6 +4271,7 @@ def register():
 
 
 def unregister():
+    bpy.types.TOPBAR_MT_file_import.remove(menu_import_nom)
     connection.disconnect()
     if activity_watch_operator is not None:
         activity_watch_operator.cancel(bpy.context)

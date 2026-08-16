@@ -32,7 +32,7 @@ def check(condition, message):
 
 
 def nomad_quad_and_tri():
-    """A quad plus a triangle, with uvs, colour and face groups."""
+    """A quad plus a triangle, with uvs, color, and face groups."""
     points = numpy.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0]], "f4")
     texcoords = numpy.array([[0, 0], [1, 0], [1, 1], [0, 1], [0, 0], [1, 0], [1, 1]], "f4")
     return convert.encode_mesh(

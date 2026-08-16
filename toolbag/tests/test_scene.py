@@ -166,20 +166,20 @@ class SceneTest(unittest.TestCase):
         matrix = list(convert.IDENTITY)
         matrix[12:15] = [1.0, 2.0, 3.0]
         light = self.scene.apply_light("sun", {
-            "light_type": "SUN", "color": [1.0, 0.5, 0.2], "intensity": 2.0,
+            "light_type": "directional", "color": [1.0, 0.5, 0.2], "intensity": 2.0,
             "power": 6.0, "factor": 1.0,   # the block carries every strength
             "world_matrix": matrix, "name": "Key", "shadow_cast": False})
         self.assertEqual(light.lightType, "directional")
         self.assertEqual(light.brightness, 2.0)   # intensity, not power
         self.assertEqual(light.position, [1.0, 2.0, 3.0])
         self.assertFalse(light.castShadows)
-        spot = self.scene.apply_light("spot", {"light_type": "SPOT",
+        spot = self.scene.apply_light("spot", {"light_type": "spot",
                                                "spot_angle": 3.14159265 / 2,
                                                "spot_softness": 0.25, "power": 5.0})
         self.assertEqual(spot.lightType, "spot")
         self.assertAlmostEqual(spot.spotAngle, 90.0, places=3)
         self.assertAlmostEqual(spot.spotSharpness, 0.75)
-        self.assertIsNone(self.scene.apply_light("env", {"light_type": "ENVIRONMENT"}))
+        self.assertIsNone(self.scene.apply_light("env", {"light_type": "environment"}))
         self.assertTrue(self.scene.delete("sun"))
 
     def test_strength_goes_through_untouched_and_only_the_radius_scales(self):
@@ -188,24 +188,24 @@ class SceneTest(unittest.TestCase):
         saved = fake_mset.getSceneUnitScale
         fake_mset.getSceneUnitScale = lambda: 0.01
         self.addCleanup(setattr, fake_mset, "getSceneUnitScale", saved)
-        light = self.scene.apply_light("bulb", {"light_type": "POINT", "power": 3.0,
+        light = self.scene.apply_light("bulb", {"light_type": "point", "power": 3.0,
                                                 "intensity": 1.0, "size": 0.5})
         self.assertAlmostEqual(light.brightness, 3.0)
         self.assertAlmostEqual(light.width, 50.0)     # a radius is a distance
         self.assertFalse(light.physicalUnits)
-        sun = self.scene.apply_light("sun", {"light_type": "SUN", "intensity": 2.0,
+        sun = self.scene.apply_light("sun", {"light_type": "directional", "intensity": 2.0,
                                              "power": 3.0})
         self.assertAlmostEqual(sun.brightness, 2.0)   # directional has no distance
 
     def test_kelvin_forces_the_color_white_and_off_restores_it(self):
         # Toolbag multiplies temperature with color; Nomad's kelvin replaces it
         light = self.scene.apply_light("key", {
-            "light_type": "POINT", "color": [1.0, 0.2, 0.1],
+            "light_type": "point", "color": [1.0, 0.2, 0.1],
             "use_kelvin": True, "kelvin": 3200})
         self.assertEqual(light.color, [1.0, 1.0, 1.0])
         self.assertTrue(light.useTemperature)
         self.assertEqual(light.temperature, 3200)
-        self.scene.apply_light("key", {"light_type": "POINT",
+        self.scene.apply_light("key", {"light_type": "point",
                                        "color": [1.0, 0.2, 0.1], "use_kelvin": False})
         self.assertEqual(light.color, [1.0, 0.2, 0.1])
         self.assertFalse(light.useTemperature)
@@ -561,7 +561,7 @@ class SceneTest(unittest.TestCase):
         self.assertAlmostEqual(z, 0.0, places=4)
 
     def test_euler_round_trips_the_order_probe_py_measures(self):
-        """R = Ry*Rx*Rz, i.e. z then x then y: what Toolbag 5.032 really does."""
+        """R = Ry*Rx*Rz, that is z then x then y: what Toolbag 5.032 really does."""
         angles = [30.0, 40.0, 50.0]
 
         def spin(point):

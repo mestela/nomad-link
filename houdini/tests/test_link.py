@@ -66,7 +66,7 @@ nomad.send(*cube_mesh_full())
 check(wait(lambda: "cube1" in link.meshes), "mesh_full lands in the cache")
 mesh = link.meshes["cube1"]
 check(mesh["name"] == "Nomad Cube" and len(mesh["positions"]) == 4, "mesh decoded")
-check(numpy.allclose(mesh["color"][0], [1, 0, 0], atol=0.01), "vertex colour decoded")
+check(numpy.allclose(mesh["color"][0], [1, 0, 0], atol=0.01), "vertex color decoded")
 
 revision = link.revision
 moved = numpy.array([[5.0, 5.0, 5.0]], "<f4")

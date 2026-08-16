@@ -2,6 +2,36 @@
 
 Every release publishes the section named after its version as the release notes.
 
+## 0.11.43
+
+- Blender: a shape key value outside [0, 1] reaches Nomad on the layer's offset factor, where
+  the slider is unbounded and signed. The raw value used to land on the main intensity, which
+  composited it correctly but pinned its [0, 100%] slider display at 100%.
+- Blender: the add-on welds UVs before sending — corners meeting at the same point share one
+  texcoord. They used to arrive one texcoord per corner, so on the Nomad side every edge read
+  as a UV seam and Face Groups built from UV islands came out one group per face.
+- Lights travel under Nomad's own type names — `directional`, `point`, `spot`,
+  `environment` — where they used to borrow Blender's `SUN`, `POINT`, `SPOT`,
+  `ENVIRONMENT`. **Update the bridges along with Nomad**: to an older bridge every light now
+  reads as a point light, and an older Nomad reads the new names the same way. The Blender
+  add-on and the Toolbag plugin in this release speak the new names.
+- Primitives stay primitives between two Nomads: a sphere, tube, or lathe arrives on the
+  peer still parametric, config and all, instead of frozen into a mesh. Bridges see no
+  difference — the arrays remain the object, so anything that ignores the new block gets
+  what it always got.
+- Validating a primitive no longer strands it on the peer. The peer kept holding a primitive,
+  which cannot take sparse edits, so it refused every stroke after the validate and the
+  object stopped updating for the rest of the session.
+- A mesh shows the paint it receives rather than ignoring it: a channel that arrives with
+  per-vertex color, roughness, metalness, or opacity turns that channel on. A validated
+  primitive used to render in its flat material color on the peer while sitting on the paint
+  it had been sent.
+- Repeaters (array, curve, mirror, radial) travel with their config, so a Nomad peer rebuilds
+  the copies itself instead of receiving them one by one. Bridges keep receiving the copies as
+  ordinary objects.
+- Protocol: `light_type` renamed (breaking), and two new blocks — `primitive` (§7.1.2) and
+  `repeater` (§10.4).
+
 ## 0.11.42
 
 - Blender: Edit Mode changes reach Nomad while you make them. Blender keeps those edits in its

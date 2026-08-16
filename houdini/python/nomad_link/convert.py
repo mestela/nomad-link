@@ -28,7 +28,7 @@ def _read(binary, offset, count, dtype):
 
 
 def decode_rgbm(binary, offset, count):
-    """Nomad's rgbm8 vertex colours: linear rgb = rgb * (m / 65025)."""
+    """Nomad's rgbm8 vertex colors: linear rgb = rgb * (m / 65025)."""
     packed = _read(binary, offset, count * 4, "u1").reshape(-1, 4).astype(numpy.float32)
     return packed[:, :3] * (packed[:, 3:4] / 65025.0)
 

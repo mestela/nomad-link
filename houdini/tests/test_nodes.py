@@ -4,7 +4,7 @@
     python3 tests/test_nodes.py
 
 This checks the array bookkeeping (winding, uv flip, attribute plumbing), not
-Houdini's own behaviour -- the real nodes still need a smoke test in Houdini.
+Houdini's own behavior -- the real nodes still need a smoke test in Houdini.
 """
 import os
 import sys
@@ -29,7 +29,7 @@ def check(condition, message):
     print("ok  " + message)
 
 
-# a quad and a triangle, with per-corner uvs and vertex colour
+# a quad and a triangle, with per-corner uvs and vertex color
 POINTS = numpy.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0]], "f4")
 SIZES = numpy.array([4, 3], "i4")
 CORNERS = numpy.array([0, 1, 2, 3, 1, 4, 2], "i4")
@@ -75,8 +75,8 @@ def test_cook_in():
     check(numpy.allclose(uv[0], [0, 0, 0]), "first corner uv follows the flipped winding")
     check(numpy.allclose(uv[:, 1], [1 - v for v in [1, 1, 0, 0, 1, 0, 0]]),
           "v flipped to Houdini's bottom-left origin")
-    colour = geo.values[(hou.attribType.Point, "Cd")].reshape(-1, 3)
-    check(numpy.allclose(colour[0], [0.2, 0.4, 0.6], atol=0.01), "Cd imported")
+    color = geo.values[(hou.attribType.Point, "Cd")].reshape(-1, 3)
+    check(numpy.allclose(color[0], [0.2, 0.4, 0.6], atol=0.01), "Cd imported")
     check(numpy.allclose(geo.values[(hou.attribType.Point, "mask")][-1], 1.0, atol=0.01),
           "mask imported")
     check(geo.values[(hou.attribType.Prim, "name")] == ["Sculpt", "Sculpt"], "prim name attribute")

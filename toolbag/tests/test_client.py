@@ -65,7 +65,7 @@ class ClientTest(unittest.TestCase):
 
     def test_hello_is_honest_about_what_this_bridge_does(self):
         advertised = set(self.nomad.hello["capabilities"])
-        self.assertEqual(self.nomad.hello["client_name"], "Marmoset Toolbag")
+        self.assertEqual(self.nomad.hello["client_name"], "Toolbag")
         self.assertEqual(self.nomad.hello["protocol"], 1)
         self.assertIn("scene_edits", advertised)     # or Nomad streams nothing live
         self.assertIn("texture", advertised)
@@ -273,7 +273,7 @@ class ClientTest(unittest.TestCase):
         self.assertAlmostEqual(sky.rotation, 45.0)
 
     def test_lights_and_cameras_arrive_and_partial_edits_merge(self):
-        self.nomad.send({"type": "light", "link_id": "sun", "light_type": "SUN",
+        self.nomad.send({"type": "light", "link_id": "sun", "light_type": "directional",
                          "intensity": 3.0, "name": "Key"})
         self.assertTrue(wait(self.link, lambda: "sun" in self.link.lights))
         light = self.link.scene.objects["sun"]

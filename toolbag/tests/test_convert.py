@@ -113,7 +113,7 @@ class ConvertTest(unittest.TestCase):
         for i in range(0, len(normals), 3):
             n = normals[i:i + 3]
             self.assertAlmostEqual(math.sqrt(sum(c * c for c in n)), 1.0, places=5)
-            # a cube centred on the origin: the normal agrees with the position
+            # a cube centered on the origin: the normal agrees with the position
             self.assertGreater(sum(a * b for a, b in zip(n, vertices[i:i + 3])), 0.0)
 
     def test_world_matrix_is_baked_into_positions(self):

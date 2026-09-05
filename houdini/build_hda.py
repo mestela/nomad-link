@@ -19,6 +19,15 @@ HDA_FILE = os.path.join(HERE, "otls", "nomad_link.hda")
 
 PY = hou.scriptLanguage.Python
 
+# Pasting copies the hidden ids with the node, so a duplicate would keep replacing
+# the original's mesh in Nomad. OnCreated does not run for a paste; OnLoaded does,
+# and also on file load, where the ids must survive.
+OUT_ON_LOADED = '''\
+if not hou.hipFile.isLoadingHipFile():
+    for name in ("meshid", "geoid"):
+        kwargs["node"].parm(name).set("")
+'''
+
 
 def button(name, label, call, help_text=""):
     parm = hou.ButtonParmTemplate(name, label)
@@ -189,7 +198,8 @@ def link_parms(node, names):
         node.parm(name).setExpression(expression, language=hou.exprLanguage.Hscript)
 
 
-def make_asset(subnet, inner, name, label, parm_group, linked, min_inputs, max_inputs):
+def make_asset(subnet, inner, name, label, parm_group, linked, min_inputs, max_inputs,
+               events=None):
     asset = subnet.createDigitalAsset(
         name=name,
         hda_file_name=HDA_FILE,
@@ -200,6 +210,9 @@ def make_asset(subnet, inner, name, label, parm_group, linked, min_inputs, max_i
     )
     definition = asset.type().definition()
     definition.setParmTemplateGroup(parm_group)
+    for event, script in (events or {}).items():
+        definition.addSection(event, script)
+        definition.setExtraFileOption("%s/IsPython" % event, True)
     asset.allowEditingOfContents()
     link_parms(asset.node(inner), linked)
     definition.updateFromNode(asset)
@@ -219,7 +232,8 @@ def main():
 
     subnet, send = build_out(container)
     make_asset(subnet, "send", "nomad_link_out", "Nomad Link Out", out_parm_group(),
-               ("autosend", "applyxform", "reverse", "scale", "senduv", "sendcolor"), 1, 1)
+               ("autosend", "applyxform", "reverse", "scale", "senduv", "sendcolor"), 1, 1,
+               events={"OnLoaded": OUT_ON_LOADED})
 
     container.destroy()
     hou.hda.installFile(HDA_FILE)

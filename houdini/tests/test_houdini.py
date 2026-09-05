@@ -168,5 +168,22 @@ nomad.send({"type": "mesh_ack", "mesh_id": "nomad_side_id", "request_id": "req9"
 check(wait(link, lambda: node_out.evalParm("meshid") == "nomad_side_id"),
       "mesh_ack stores Nomad's mesh id on the node")
 
+# a pasted copy must not inherit the ids, or it would replace the original's mesh
+copy = hou.copyNodesTo([node_out], container)[0]
+check(copy.evalParm("meshid") == "" and copy.evalParm("geoid") == "",
+      "a pasted Out node starts without Nomad's ids (OnLoaded)")
+check(node_out.evalParm("meshid") == "nomad_side_id", "the original keeps its id")
+
+# a copy that did inherit them (made before that script existed) heals on send
+copy.parm("meshid").set("nomad_side_id")
+copy.setInput(0, box)
+nomad.received[:] = []
+copy.parm("send").pressButton()
+check(wait(link, lambda: nomad.first("mesh_full")[0] is not None), "the copy sends")
+check(nomad.first("mesh_full")[0]["mesh_id"] != "nomad_side_id",
+      "the copy sends as a new mesh rather than over the original")
+check(copy.evalParm("meshid") == "", "its inherited id was cleared")
+check(node_out.evalParm("meshid") == "nomad_side_id", "the original's id is untouched")
+
 link.disconnect()
 print("\nall good")

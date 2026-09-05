@@ -110,12 +110,8 @@ def test_two_meshes_merge():
           "per-mesh prim names")
 
 
-def test_send_geometry():
-    link = client()
-    link.peer_capabilities = {"ngon"}
-    sent = []
-    link.send_mesh = lambda header, binary, path="": sent.append((header, binary))
-
+def out_geometry():
+    """What the Out asset's wrangles hand to the inner Python SOP."""
     geo = fake_hou.Geometry()
     geo.createPoints(POINTS.astype("f8"))
     geo.addAttrib(hou.attribType.Prim, nodes.PRIM_SIZE, 0)
@@ -127,11 +123,24 @@ def test_send_geometry():
                numpy.column_stack((TEXCOORDS, numpy.zeros(len(TEXCOORDS)))))
     geo.addAttrib(hou.attribType.Point, "Cd", (1.0, 1.0, 1.0))
     geo._store(hou.attribType.Point, "Cd", numpy.tile([1.0, 0.5, 0.0], (5, 1)))
+    return geo
 
-    node = fake_hou.Node("nomad_link_out1", {
-        "scale": 1.0, "reverse": 1, "applyxform": 0, "senduv": 1, "sendcolor": 1,
-        "meshname": "Houdini Mesh", "meshid": "", "geoid": "",
-    })
+
+def out_node(name, **overrides):
+    parms = {"scale": 1.0, "reverse": 1, "applyxform": 0, "senduv": 1, "sendcolor": 1,
+             "meshname": "Houdini Mesh", "meshid": "", "geoid": ""}
+    parms.update(overrides)
+    return fake_hou.Node(name, parms, type_name=nodes.OUT_TYPE)
+
+
+def test_send_geometry():
+    link = client()
+    link.peer_capabilities = {"ngon"}
+    sent = []
+    link.send_mesh = lambda header, binary, path="": sent.append((header, binary))
+
+    geo = out_geometry()
+    node = out_node("nomad_link_out1")
     check(nodes.send_geometry(node, geo), "send_geometry reports success")
     header, binary = sent[-1]
     check(header["type"] == "mesh_full" and header["face_format"] == "corners",
@@ -155,6 +164,25 @@ def test_send_geometry():
     check(header["face_format"] == "int32x4", "peer without ngon gets int32x4")
     split = convert.decode_mesh(header, binary)
     check(sorted(split["sizes"].tolist()) == [3, 4], "quad stays a quad, triangle stays a triangle")
+
+
+def test_duplicate_out_node():
+    """A copied Out node inherits the acked ids; only the older node may keep them."""
+    link = client()
+    link.peer_capabilities = set()
+    sent = []
+    link.send_mesh = lambda header, binary, path="": sent.append(header)
+    geo = out_geometry()
+    original = out_node("nomad_link_dup1", meshid="nomad_side_id", geoid="nomad_geo_id")
+    copy = out_node("nomad_link_dup2", meshid="nomad_side_id", geoid="nomad_geo_id")
+
+    nodes.send_geometry(copy, geo)
+    check(sent[-1]["mesh_id"] != "nomad_side_id", "the copy sends as a new mesh")
+    check(copy.evalParm("meshid") == "" and copy.evalParm("geoid") == "",
+          "the copy's inherited ids are cleared")
+    nodes.send_geometry(original, geo)
+    check(sent[-1]["mesh_id"] == "nomad_side_id", "the original keeps Nomad's id")
+    check(sent[-1]["geometry_id"] == "nomad_geo_id", "and its geometry id")
 
 
 def test_send_empty():

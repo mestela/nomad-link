@@ -2,6 +2,13 @@
 
 Every release publishes the section named after its version as the release notes.
 
+## 0.11.44
+
+- Houdini: a copied *Nomad Link Out* node is a new object in Nomad. The copy used to inherit
+  the original's mesh id, so sending from it replaced the original's mesh instead of adding
+  one. Pasting now clears the id, and a copy made with an older build heals itself on send.
+- No protocol change.
+
 ## 0.11.43
 
 - Blender: a shape key value outside [0, 1] reaches Nomad on the layer's offset factor, where

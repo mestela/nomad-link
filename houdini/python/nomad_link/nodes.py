@@ -279,9 +279,28 @@ def _prim_ints(geo, name):
     return numpy.array(geo.primIntAttribValues(name), numpy.int32)
 
 
+def _acked_id(node):
+    """Nomad's id for this node, unless an older Out node carries the same one.
+
+    Copying a node copies the hidden parms, so the copy would keep replacing the
+    original's mesh. The older node keeps the id; the copy starts from its path.
+    """
+    mesh_id = node.evalParm("meshid")
+    if not mesh_id:
+        return ""
+    for other in _instances(OUT_TYPE):
+        if other == node or other.evalParm("meshid") != mesh_id:
+            continue
+        if other.sessionId() < node.sessionId():
+            node.parm("meshid").set("")
+            node.parm("geoid").set("")
+            return ""
+    return mesh_id
+
+
 def _mesh_id(node):
     """Stable per-node id: the parm once Nomad has acked, else derived from the path."""
-    return node.evalParm("meshid") or uuid.uuid5(ID_NAMESPACE, node.path()).hex
+    return _acked_id(node) or uuid.uuid5(ID_NAMESPACE, node.path()).hex
 
 
 def _geometry_id(node):

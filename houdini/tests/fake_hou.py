@@ -5,6 +5,7 @@ This is a test double, not an emulator: it records what the SOP code asks for
 and hands back plausible values, so the array bookkeeping in cook_in /
 send_geometry can be checked without a Houdini licence.
 """
+import itertools
 import sys
 import types
 
@@ -144,13 +145,31 @@ class Parm:
         self.value = value
 
 
+_session_ids = itertools.count(1)
+_instances = {}  # type name -> nodes created with that type_name
+
+
+class NodeType:
+    def __init__(self, name):
+        self._name = name
+
+    def instances(self):
+        return tuple(_instances.get(self._name, ()))
+
+
 class Node:
-    def __init__(self, name="node", parms=None, parent=None, geometry=None):
+    def __init__(self, name="node", parms=None, parent=None, geometry=None, type_name=None):
         self._name = name
         self._parent = parent
         self._parms = {key: Parm(self, key, value) for key, value in (parms or {}).items()}
         self._geometry = geometry if geometry is not None else Geometry()
         self.children = {}
+        self._session_id = next(_session_ids)
+        if type_name:
+            _instances.setdefault(type_name, []).append(self)
+
+    def sessionId(self):
+        return self._session_id
 
     def parm(self, name):
         return self._parms.get(name)
@@ -191,7 +210,7 @@ def install():
     module.isUIAvailable = lambda: False
     module.homeHoudiniDirectory = lambda: "/tmp"
     module.sopNodeTypeCategory = lambda: "Sop"
-    module.nodeType = lambda category, name: None
+    module.nodeType = lambda category, name: NodeType(name) if name in _instances else None
     module.node = lambda path: None
     sys.modules["hou"] = module
     return module
